@@ -1,0 +1,6 @@
+/home/bahaduri/.conda/envs/vrenv-alf/lib/python3.10/site-packages/ai2thor/controller.py
+line 859 the lock_release()  was commented out. it is the same for VIPER. it was giving error
+
+
+/home/bahaduri/RL4VLM/VLM_PPO_ALF/main_alf.py
+lines 

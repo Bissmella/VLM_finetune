@@ -15,7 +15,7 @@ pip3 install protobuf==3.20.3
 pip3 install pydantic==1.10.14
 pip3 install pydantic-core==2.16.3
 pip3 uninstall frozenlist gradio murmurhash preshed spacy srsly thinc weasel aiosignal annotated-types blis catalogue cloudpathlib cymem
-export ALFWORLD_DATA=<storage_path>
+export ALFWORLD_DATA=/home/bahaduri/VIPER/data <storage_path>
 alfworld-download
 ```
 

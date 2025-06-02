@@ -6,12 +6,14 @@ from collections import deque
 
 import gymnasium as gym
 from gymnasium import spaces
-import gym_cards
+#import gym_cards
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_flash_sdp(False)
 
 from a2c_ppo_acktr import algo, utils, rl_utils
 from a2c_ppo_acktr.rl_utils import get_prompt, text_projection, get_alfworld_prompt
@@ -23,7 +25,7 @@ from a2c_ppo_acktr.llava_interface import init_pretrained_model, find_all_linear
 
 # For alfworld
 from alf_utils import load_config_file, get_obs_image, ALF_ACTION_LIST, process_action, compute_reward, AlfEnv
-
+from pyvirtualdisplay import Display
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.conversation import conv_templates, SeparatorStyle
@@ -84,7 +86,7 @@ def main():
             print("4bit quantization")
             base = LlavaLlamaForCausalLM.from_pretrained(model_path, load_in_4bit=True, quantization_config=q4_config, cache_dir=cache_dir)
         else:
-            base = LlavaLlamaForCausalLM.from_pretrained(model_path, cache_dir=cache_dir)
+            base = LlavaLlamaForCausalLM.from_pretrained(model_path, cache_dir=cache_dir, torch_dtype=torch.float16)
 
     base.config.max_length = 1024
     print("Model max context length:{}".format(base.config.max_length))
@@ -107,6 +109,8 @@ def main():
 
     ## Inputing Prompt here
     assert args.alf_config is not None, "Alfworld environment requires a config file"
+    display = Display(visible=0, size=(1024, 768))
+    display.start()
     envs = AlfEnv(args.alf_config)
     obs, infos = envs.reset(seed=args.seed)
     admissible_commands = list(infos['admissible_commands'])[0]

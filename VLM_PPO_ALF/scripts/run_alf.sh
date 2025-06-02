@@ -1,4 +1,4 @@
-export ALFWORLD_DATA=~/alfworld-storage
+export ALFWORLD_DATA=/home/bahaduri/VIPER/data  #~/alfworld-storage
 TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES="0" accelerate launch --config_file config_zero2.yaml --main_process_port 29330 ../main_alf.py \
     --env-name "AlfredThorEnv" \
     --alf_config ../alf-config.yaml \
@@ -16,7 +16,7 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES="0" accelerate launch --config
     --temperature 0.2 \
     --ppo-epoch 4 \
     --mini-batch-size 1 \
-    --model-path /your_sft_checkpoint_for_alfworld \
+    --model-path "liuhaotian/llava-v1.6-mistral-7b" \
     --use-lora \
     --train-vision all \
     # --wandb-project you_wandb_proj \
