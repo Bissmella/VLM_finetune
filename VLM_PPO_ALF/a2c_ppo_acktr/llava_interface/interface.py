@@ -86,3 +86,10 @@ def llava_evaluate(value_model, input_ids, output_ids, image_tensor, temperature
     action_tokens_log_prob = torch.sum(selected_log_probs[:,match_index-1:], dim = 1)
     sum_log_prob = thought_prob_coef*thought_log_prob + action_tokens_log_prob
     return values, sum_log_prob, action_tokens_log_prob
+
+
+def qwen_generate(processor, input_ids, image_tensor, args):
+
+
+
+    return None

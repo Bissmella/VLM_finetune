@@ -3,4 +3,5 @@ line 859 the lock_release()  was commented out. it is the same for VIPER. it was
 
 
 /home/bahaduri/RL4VLM/VLM_PPO_ALF/main_alf.py
-lines 
+lines 15 - 16    to avoid the errors related to cutlass probably relating to flash attention which does not work
+in some GPUs except A100 and H100 and top ones
