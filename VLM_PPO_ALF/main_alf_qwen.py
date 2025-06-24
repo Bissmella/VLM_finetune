@@ -23,6 +23,13 @@ from a2c_ppo_acktr.storage import RolloutStorage
 from a2c_ppo_acktr.llava_interface import llava_evaluate, llava_generate
 from a2c_ppo_acktr.llava_interface import init_pretrained_model, find_all_linear_names, load_lora_model
 
+from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from llava.conversation import conv_templates, SeparatorStyle
+from llava.model.builder import load_pretrained_model
+from llava.utils import disable_torch_init
+from llava.mm_utils import tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
+from llava.model import LlavaLlamaForCausalLM
+
 from alf_utils import load_config_file, get_obs_image, ALF_ACTION_LIST, process_action, compute_reward, AlfEnv
 from pyvirtualdisplay import Display
 
@@ -44,7 +51,8 @@ from tqdm import tqdm
 import accelerate
 from accelerate.state import AcceleratorState
 
-
+from PIL import Image
+import torchvision.transforms as T
 
 def main():
     args = get_args()
@@ -82,13 +90,13 @@ def main():
 
     base.config.max_length = 1024
     print("Model max context length:{}".format(base.config.max_length))
-    base, tokenizer = init_pretrained_model(base, tokenizer, pretrain_mm_adapter = args.pretrain_mm_adapter)
-    image_processor = base.get_vision_tower().image_processor
+    # base, tokenizer = init_pretrained_model(base, tokenizer, pretrain_mm_adapter = args.pretrain_mm_adapter)
+    # image_processor = base.get_vision_tower().image_processor
 
     base_lora_config = LoraConfig(
             r=128,
             lora_alpha=256,
-            target_modules=find_all_linear_names(base,args.train_vision),
+            target_modules=["q_proj", "v_proj"],             #  find_all_linear_names(base,args.train_vision),
             lora_dropout=0.05,
             bias="none",
             task_type="CAUSAL_LM",
@@ -96,28 +104,33 @@ def main():
     if args.use_lora:
         base = get_peft_model(base, base_lora_config)
 
-    value_model = QwenVLMValue(base)
+    value_model = QwenVLMValue(base, processor)
     value_model = value_model.to(model_device)
 
+    #virtual display
+    display = Display(visible=0, size=(1024, 768))
+    display.start()
     envs = AlfEnv(args.alf_config)
     obs, infos = envs.reset(seed=args.seed)
     admissible_commands = list(infos['admissible_commands'])[0]
     qs = get_alfworld_prompt(envs, obs = infos['observation_text'], admissible_actions=admissible_commands, action_only = args.action_only_prompt)
     qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
+    
+    #following part is unnecessary, done by the processor
     conv = conv_templates[args.conv_mode].copy()
     conv.append_message(conv.roles[0], qs)
     conv.append_message(conv.roles[1], None)
     prompt = conv.get_prompt()
     print(prompt)
 
-    INPUT_IDS = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0)
-    INPUT_IDS[INPUT_IDS == 0] = 259 # 869: . (period), 29871: SPIECE, 259: whitespace
-
+    INPUT_IDS = qs   #tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0)
+    #INPUT_IDS[INPUT_IDS == 0] = 259 # 869: . (period), 29871: SPIECE, 259: whitespace
+    #breakpoint()
     if "alfred" in args.env_name.lower():
         projection_f = partial(lambda x: x)
 
-    actor_critic = VLMPolicy(tokenizer=tokenizer,
-                             image_processor=image_processor,
+    actor_critic = QwenVLMPolicy(
+                             processor=processor,
                              value_model=value_model,
                              projection_f=projection_f,
                              INPUT_IDS=INPUT_IDS,
@@ -145,8 +158,15 @@ def main():
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
                               (300, 300, 3), spaces.Discrete(14), args.max_new_tokens)
 
-    image_tensor = obs
-    _, output_ids, action, action_log_prob, action_tokens_log_prob = actor_critic.act(image_tensor, INPUT_IDS = INPUT_IDS)
+    image_tensor = obs.squeeze(0).permute(2,0,1).float()
+    
+    if image_tensor.max() <= 1.0:
+        image_tensor = (image_tensor * 255).byte()
+    
+    to_pil = T.ToPILImage()
+    image = to_pil(image_tensor)
+    
+    _, output_ids, action, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
     admissible_commands = list(infos['admissible_commands'])[0]
 
     print("output_ids:{}".format(output_ids))

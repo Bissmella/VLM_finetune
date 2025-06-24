@@ -105,12 +105,12 @@ class QwenVLMValue(nn.Module):
     actually the base is also used for generation!
     """
     def __init__(self, base, processor):
-        super(VLMValue, self).__init__()
+        super(QwenVLMValue, self).__init__()
         self.base = base
         self.processor = processor
         # hard-code to llama hidden size for the value head
         self.value_head = nn.Sequential(
-            nn.Linear(4096, 1024), # First layer
+            nn.Linear(1536, 1024), # First layer  #the hidden states of the qwen has 1536 dims
             nn.ReLU(), # Non-linearity
             nn.Linear(1024, 512), # Second layer
             nn.ReLU(), # Non-linearity
@@ -137,7 +137,7 @@ class QwenVLMValue(nn.Module):
 
 
 class QwenVLMPolicy(nn.Module):
-    def __init__(self, tokenizer,
+    def __init__(self,
                 processor,
                 value_model,
                 args,
@@ -147,9 +147,8 @@ class QwenVLMPolicy(nn.Module):
         """
         projection_f: the postprocessing function to parse text action
         """
-        super(VLMPolicy, self).__init__()
+        super(QwenVLMPolicy, self).__init__()
         self.args = args
-        self.tokenizer = tokenizer
         self.processor = processor
         self.value_model = value_model
         self.base = value_model.base
@@ -185,10 +184,10 @@ class QwenVLMPolicy(nn.Module):
         image_tensor = self.process_obs(inputs)
         if INPUT_IDS is None:
             INPUT_IDS = self.INPUT_IDS
-        value, action_log_prob, _ = llava_evaluate(value_model = self.value_model,
-                                        input_ids = INPUT_IDS,
+        value, action_log_prob, _ = qwen_evaluate(value_model = self.value_model,
                                         output_ids = output_ids,
-                                        image_tensor = image_tensor,
                                         temperature = self.args.temperature,
-                                        thought_prob_coef = self.args.thought_prob_coef)
+                                        thought_prob_coef = self.args.thought_prob_coef,
+                                        text = INPUT_IDS,
+                                        image = image_tensor,)
         return value, action_log_prob

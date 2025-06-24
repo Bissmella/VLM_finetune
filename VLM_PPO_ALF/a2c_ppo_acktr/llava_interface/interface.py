@@ -1,6 +1,7 @@
 import torch
 import math
 from qwen_vl_utils import process_vision_info
+from torch.nn.utils.rnn import pad_sequence
 def split_list(lst, n):
     """Split a list into n (roughly) equal-sized chunks"""
     chunk_size = math.ceil(len(lst) / n)  # integer division
@@ -118,39 +119,45 @@ def qwen_generate(value_model, processor, text, image, args):
         output_scores=True,
         output_hidden_states=True,
         return_dict_in_generate=True,
-        pad_token_id=processor.eos_token_id,)
-        output_ids = outputs['sequences'] #TODO check the ooutput item
+        pad_token_id=processor.tokenizer.eos_token_id,)
+        output_ids = outputs['sequences'] #TODO check the output item
+    
     output_ids_trimmed = [
                     out_ids[len(in_ids) :] for in_ids, out_ids in zip(input_ids, output_ids)
                 ]
     outputs = processor.batch_decode(
                         output_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
                     )
+    padded_output_ids_trimmed = pad_sequence(output_ids_trimmed, batch_first=True, padding_value=0)
     padded_output_ids = torch.zeros(output_ids.size(0), 2*args.max_new_tokens).to(dtype=output_ids.dtype, device = output_ids.device)
-    padded_output_ids[:, :output_ids.size(1)] = output_ids
+    
+    padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
     with torch.no_grad():
-        values, sum_log_probs, action_tokens_log_prob = qwen_evaluate(value_model, input_ids, padded_output_ids, image, args.temperature, args.thought_prob_coef, processor)
+        values, sum_log_probs, action_tokens_log_prob = qwen_evaluate(value_model, padded_output_ids, args.temperature, args.thought_prob_coef, processor, input=input  )
     return values, padded_output_ids, outputs, sum_log_probs, action_tokens_log_prob
 
 
 
-def qwen_evaluate(value_model, input_ids, output_ids, image_tensor, temperature, thought_prob_coef, outputs=None, processor = None):
-
+def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, processor, text=None, image=None, input=None):
+    
+    if input is None:
+        input = qwen_process(processor, text, image)
+    input_ids = input["input_ids"]
+    
     if output_ids.size(0) != 1:
-        input_ids = input_ids.broadcast_to(output_ids.size(0), input_ids.size(-1))
+        input_ids = input_ids.broadcast_to(output_ids.size(0), input_ids.size(-1)) #probably making them with same batch size
     base = value_model.base
-    image_tensor = image_tensor.to(base.device, dtype=base.dtype)
     output_ids = output_ids.to(base.device)
-
-    #omit the first output token
+    #TODO check input_ids   to be a long tensor
     outputs = base(
         input_ids = input_ids,
         output_hidden_states = True,
         )
     scores = outputs.logits
 
-    input_token_len = output_ids.shape[1] - output_ids.shape[1]
+    input_token_len = input_ids.shape[1] - output_ids.shape[1]
     hidden_states = outputs.hidden_states[-1][:, input_token_len-1]
+    breakpoint()
     values = value_model.value_head(hidden_states)
     scores = scores * (1/temperature)
     scores = scores.to(torch.float32)
@@ -182,9 +189,6 @@ def qwen_evaluate(value_model, input_ids, output_ids, image_tensor, temperature,
     action_tokens_log_prob = torch.sum(selected_log_probs[:,match_index-1:], dim = 1)
     sum_log_prob = thought_prob_coef*thought_log_prob + action_tokens_log_prob
     return values, sum_log_prob, action_tokens_log_prob
-
-
-
 
 
 

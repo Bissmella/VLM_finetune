@@ -5,3 +5,28 @@ line 859 the lock_release()  was commented out. it is the same for VIPER. it was
 /home/bahaduri/RL4VLM/VLM_PPO_ALF/main_alf.py
 lines 15 - 16    to avoid the errors related to cutlass probably relating to flash attention which does not work
 in some GPUs except A100 and H100 and top ones
+
+
+/home/bahaduri/RL4VLM/VLM_PPO/scripts/run_nl.sh
+line 2   --num_processes=1   ($NUM_GPUS) was added to avoid invalid device ordinal error
+
+
+
+the transformers version updated to 4.50.0 with following changes:
+Installing collected packages: safetensors, hf-xet, huggingface-hub, tokenizers, transformers
+  Attempting uninstall: safetensors
+    Found existing installation: safetensors 0.4.2
+    Uninstalling safetensors-0.4.2:
+      Successfully uninstalled safetensors-0.4.2
+  Attempting uninstall: huggingface-hub
+    Found existing installation: huggingface_hub 0.20.2
+    Uninstalling huggingface_hub-0.20.2:
+      Successfully uninstalled huggingface_hub-0.20.2
+  Attempting uninstall: tokenizers
+    Found existing installation: tokenizers 0.15.1
+    Uninstalling tokenizers-0.15.1:
+      Successfully uninstalled tokenizers-0.15.1
+  Attempting uninstall: transformers
+    Found existing installation: transformers 4.37.2
+    Uninstalling transformers-4.37.2:
+      Successfully uninstalled transformers-4.37.2

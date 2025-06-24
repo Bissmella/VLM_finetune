@@ -60,7 +60,7 @@ def main():
         torch.backends.cudnn.deterministic = True
 
     torch.set_num_threads(1)
-
+    breakpoint()
     accelerator = accelerate.Accelerator(gradient_accumulation_steps=args.grad_accum_steps)
     device = accelerator.device
     ## environment interaction device is cpu
