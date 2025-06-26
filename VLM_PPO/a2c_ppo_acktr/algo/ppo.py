@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import accelerate
+from collections import OrderedDict
 
 
 class PPO():
@@ -16,7 +17,9 @@ class PPO():
                  value_loss_coef,
                  entropy_coef,
                  max_grad_norm=None,
-                 use_clipped_value_loss=True):
+                 use_clipped_value_loss=True,
+                 save_dir = "",
+                 save_interval =1):
 
         self.actor_critic = actor_critic
 
@@ -34,7 +37,10 @@ class PPO():
         self.optimizer = optimizer
         self.accelerator = accelerator
 
-    def update(self, rollouts):
+        self.save_dir = save_dir
+        self.save_interval = save_interval
+
+    def update(self, rollouts, update_num):
         advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
         advantages = (advantages - advantages.mean()) / (
             advantages.std() + 1e-5)
@@ -110,5 +116,21 @@ class PPO():
         value_loss_epoch /= grad_step
         action_loss_epoch /= grad_step
         dist_entropy_epoch /= grad_step
-
+        
+        if self.save_dir != "":
+            if update_num % self.save_interval == 0:
+                self.save_checkpoint(update_num)
+            self.save_checkpoint("last")
         return value_loss_epoch, action_loss_epoch, dist_entropy_epoch
+    
+
+    def get_trainable_params(self, return_with_names=True):
+        return filter(lambda p: p[1].requires_grad, self.actor_critic.named_parameters())
+    
+    def save_checkpoint(self,update_num):
+        model_state_dict = OrderedDict(
+            {k: v for k, v in self.get_trainable_params()}
+        )
+        torch.save(model_state_dict, self.save_dir + f"/model_{update_num}.checkpoint")
+        torch.save(self.optimizer.state_dict(), self.save_dir + f"/optimizer_{update_num}.checkpoint")
+        print("model saved")

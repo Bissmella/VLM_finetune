@@ -120,7 +120,7 @@ def qwen_generate(value_model, processor, text, image, args):
         output_hidden_states=True,
         return_dict_in_generate=True,
         pad_token_id=processor.tokenizer.eos_token_id,)
-        output_ids = outputs['sequences'] #TODO check the output item
+        output_ids = outputs['sequences'] 
     
     output_ids_trimmed = [
                     out_ids[len(in_ids) :] for in_ids, out_ids in zip(input_ids, output_ids)
@@ -129,7 +129,8 @@ def qwen_generate(value_model, processor, text, image, args):
                         output_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
                     )
     padded_output_ids_trimmed = pad_sequence(output_ids_trimmed, batch_first=True, padding_value=0)
-    padded_output_ids = torch.zeros(output_ids.size(0), 2*args.max_new_tokens).to(dtype=output_ids.dtype, device = output_ids.device)
+    padded_output_ids = torch.full((output_ids.size(0), 2*args.max_new_tokens), 151643, dtype=output_ids.dtype, device = output_ids.device) #151643 is pad token in qwen2vl #TODO hardcoded
+    
     
     padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
     with torch.no_grad():
@@ -142,34 +143,38 @@ def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, proce
     
     if input is None:
         input = qwen_process(processor, text, image)
-    input_ids = input["input_ids"]
     
-    if output_ids.size(0) != 1:
-        input_ids = input_ids.broadcast_to(output_ids.size(0), input_ids.size(-1)) #probably making them with same batch size
+    if input['input_ids'].size(0) != 1:
+        input['input_ids'] = input['input_ids'].broadcast_to(output_ids.size(0), input['input_ids'].size(-1)) #Mking them with same batch size
+    input['input_ids'] = torch.cat([input["input_ids"], output_ids], dim=1)
+    input['attention_mask'] = torch.ones_like(input['input_ids'], dtype=torch.long).to(input['input_ids'].device)
+    
     base = value_model.base
     output_ids = output_ids.to(base.device)
     #TODO check input_ids   to be a long tensor
+    
     outputs = base(
-        input_ids = input_ids,
+        **input, #input_ids = input_ids,
         output_hidden_states = True,
         )
     scores = outputs.logits
 
-    input_token_len = input_ids.shape[1] - output_ids.shape[1]
+    input_token_len = input['input_ids'].shape[1] - output_ids.shape[1]
     hidden_states = outputs.hidden_states[-1][:, input_token_len-1]
-    breakpoint()
+    
     values = value_model.value_head(hidden_states)
     scores = scores * (1/temperature)
     scores = scores.to(torch.float32)
     log_probs = torch.nn.functional.log_softmax(scores, dim=-1)
     log_probs = log_probs.to(torch.bfloat16)
     # omit the first outputted id which is decoder start token
-    output_ids_mask = (output_ids != 0)[:, 1:]
+    output_ids_mask = (output_ids != 151643)[:, 1:]
     ## selected_log_probs counts the log prob of the first token
+    
     selected_log_probs = output_ids_mask*torch.take_along_dim(log_probs[:, input_token_len:-1], output_ids[:,1:].unsqueeze(2), dim = 2).squeeze(2)
     unfolded = output_ids.unfold(dimension=-1, size=3, step=1)
-    # the text string '"action":' corresponts to this sequence of tokens: (torch.tensor([[29908,2467,1115]]))
-    target = torch.tensor([29908,2467,1115]).to(base.device)
+    # the text string '"action":' corresponts to this sequence of tokens: (torch.tensor([[1311]]))  in qwen2vl tokenizer
+    target = torch.tensor([1311]).to(base.device)
     matches = (unfolded == target).all(dim = -1)
     match_index = matches.nonzero(as_tuple=True)[-1]
     if match_index.shape[0] >= 1:

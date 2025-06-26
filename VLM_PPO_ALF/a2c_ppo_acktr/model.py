@@ -125,6 +125,7 @@ class QwenVLMValue(nn.Module):
         # _, _, _, _, inputs_embeds, _ = self.base.prepare_inputs_labels_for_multimodal(input_ids.to(self.base.device), None, None, None, None, image_tensor)
         # inputs_embeds = inputs_embeds.to(self.base.device, dtype = self.base.dtype)
         input = qwen_process(self.processor, text, image)
+        input = input.to(self.base.device)
         # inputs_ids = input.input_ids
         # assert inputs_ids.shape[1] > 256
         outputs = self.base(

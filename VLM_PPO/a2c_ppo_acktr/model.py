@@ -5,8 +5,9 @@ import torch.nn.functional as F
 
 from a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
 from a2c_ppo_acktr.utils import init
-from a2c_ppo_acktr.llava_interface import llava_evaluate, llava_generate
+from a2c_ppo_acktr.llava_interface import llava_evaluate, llava_generate, qwen_generate, qwen_process, qwen_evaluate
 import torch.nn.init as init
+import torchvision.transforms as T
 
 class Flatten(nn.Module):
     def forward(self, x):
@@ -98,4 +99,106 @@ class VLMPolicy(nn.Module):
                                         image_tensor = image_tensor,
                                         temperature = self.args.temperature,
                                         thought_prob_coef = self.args.thought_prob_coef)
+        return value, action_log_prob
+
+
+class QwenVLMValue(nn.Module):
+    """
+    actually the base is also used for generation!
+    """
+    def __init__(self, base, processor):
+        super(QwenVLMValue, self).__init__()
+        self.base = base
+        self.processor = processor
+        # hard-code to llama hidden size for the value head
+        self.value_head = nn.Sequential(
+            nn.Linear(1536, 1024), # First layer  #the hidden states of the qwen has 1536 dims
+            nn.ReLU(), # Non-linearity
+            nn.Linear(1024, 512), # Second layer
+            nn.ReLU(), # Non-linearity
+            nn.Linear(512, 1) # Output layer
+            ).to(base.device, dtype=torch.float16) # Move to specified device with dtype
+
+    def forward(self,  text, image):
+        # if image_tensor.size(0) != 1:
+        #     input_ids = input_ids.broadcast_to(image_tensor.size(0), input_ids.size(-1))
+
+        # image_tensor = image_tensor.to(self.base.device, dtype = self.base.dtype)
+        # _, _, _, _, inputs_embeds, _ = self.base.prepare_inputs_labels_for_multimodal(input_ids.to(self.base.device), None, None, None, None, image_tensor)
+        # inputs_embeds = inputs_embeds.to(self.base.device, dtype = self.base.dtype)
+        input = qwen_process(self.processor, text, image)
+        # inputs_ids = input.input_ids
+        # assert inputs_ids.shape[1] > 256
+        input = input.to(self.base.device)
+        outputs = self.base(
+            **input,
+            output_hidden_states=True)
+        hidden_states = outputs.hidden_states
+        values = self.value_head(hidden_states[-1][:, -1])
+        return values
+
+
+
+class QwenVLMPolicy(nn.Module):
+    def __init__(self,
+                processor,
+                value_model,
+                args,
+                INPUT_IDS,
+                projection_f,
+                base_kwargs=None):
+        """
+        projection_f: the postprocessing function to parse text action
+        """
+        super(QwenVLMPolicy, self).__init__()
+        self.args = args
+        self.processor = processor
+        self.value_model = value_model
+        self.base = value_model.base
+        self.INPUT_IDS = INPUT_IDS
+        self.projection_f = projection_f
+
+    def process_obs(self, obs):
+        #process the observation with the image processor
+        processed_images = obs
+        return self.image_processor.preprocess(processed_images, return_tensors='pt')['pixel_values'].to(dtype=self.base.dtype)
+
+    def act(self, image, deterministic=False, text=None):
+        """
+        
+        """
+        # image_tensor = self.process_obs(inputs)
+        # if INPUT_IDS is None:
+        #     INPUT_IDS = self.INPUT_IDS
+        value, output_ids, text_action, action_log_prob, action_tokens_log_prob = qwen_generate(value_model = self.value_model,
+                                                    processor = self.processor,
+                                                    text = text,
+                                                    image=image,
+                                                    args = self.args)
+        action = self.projection_f(text_action)
+        return value, output_ids, action, action_log_prob, action_tokens_log_prob
+
+    def get_value(self, image, text=None):
+        if text is None:
+            text = self.INPUT_IDS
+        return self.value_model(text = text, image = image)
+
+    def evaluate_actions(self, inputs, output_ids, INPUT_IDS=None):
+        assert inputs.shape[0] == 1, "multip image in action evaluation!"
+        image_tensor = inputs.squeeze(0).permute(2,0,1).float() #TODO rollouts.obs[step] needs to be checked if expected shape
+        if image_tensor.max() <= 1.0:
+            image_tensor = (image_tensor * 255).byte()
+        to_pil = T.ToPILImage()
+        image = to_pil(image_tensor)
+        #image_tensor = self.process_obs(inputs)
+        if INPUT_IDS is None:
+            INPUT_IDS = self.INPUT_IDS
+        output_ids = output_ids.to(self.base.device)
+        value, action_log_prob, _ = qwen_evaluate(value_model = self.value_model,
+                                        output_ids = output_ids,
+                                        temperature = self.args.temperature,
+                                        thought_prob_coef = self.args.thought_prob_coef,
+                                        processor=self.processor,
+                                        text = INPUT_IDS,
+                                        image = image,)
         return value, action_log_prob

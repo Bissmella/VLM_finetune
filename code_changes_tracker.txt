@@ -30,3 +30,7 @@ Installing collected packages: safetensors, hf-xet, huggingface-hub, tokenizers,
     Found existing installation: transformers 4.37.2
     Uninstalling transformers-4.37.2:
       Successfully uninstalled transformers-4.37.2
+
+
+***the gym-cards  sft weights are in the following link but files too big:
+https://huggingface.co/datasets/LEVI-Project/sft-model-data/tree/main
