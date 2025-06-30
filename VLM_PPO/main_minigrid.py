@@ -106,7 +106,7 @@ def main():
             #     base =  LlavaMistralForCausalLM.from_pretrained(model_path, cache_dir=cache_dir)
             # else:
             #     base = LlavaLlamaForCausalLM.from_pretrained(model_path, cache_dir=cache_dir)
-
+    
     use_grad_ckpt = True
     if use_grad_ckpt:
         if hasattr(base, "enable_input_require_grads"):
@@ -136,15 +136,15 @@ def main():
         base.set_adapter("policy")
     value_model = QwenVLMValue(base, processor)
     value_model = value_model.to(model_device)
-
-    if "gym_cards" in args.env_name.lower():
+    breakpoint()
+    if "gym_cards" or "minigrid" in args.env_name.lower():
         envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
                              args.gamma, None, device, False, 1)
     else:
         print("Environment not supported")
         exit(1)
 
-
+    
     obs = envs.reset()
     infos = None
     ## Inputing Prompt here
@@ -197,7 +197,7 @@ def main():
         image_tensor = (image_tensor * 255).byte()
     to_pil = T.ToPILImage()
     image = to_pil(image_tensor)
-    _, output_ids, action, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
+    _, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
     print("action:{}".format(action))
     print("action_log_prob:{}".format(action_log_prob))
     print("action_tokens_log_prob:{}".format(action_tokens_log_prob))
@@ -236,7 +236,7 @@ def main():
                     image_tensor = (image_tensor * 255).byte()
                 to_pil = T.ToPILImage()
                 image = to_pil(image_tensor)
-                value, output_id, action, action_log_prob, action_tokens_log_prob = actor_critic.act(
+                value, output_id, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(
                         image, text = INPUT_IDS)
             text_action = processor.decode(list(filter(lambda num: num != 151643, output_id[0].tolist()))) #151643 is the pad_token for the qwen model #TODO hardcoded
             prev_infos = copy.deepcopy(infos)
@@ -250,7 +250,7 @@ def main():
             prompt = conv.get_prompt()
             masks = torch.FloatTensor(
                 [[0.0] if done_ else [1.0] for done_ in done])
-
+            tasks = [None] * args.num_processes
             running_episode_rewards += reward.flatten()
             for i, d, r in zip(range(args.num_processes), done, reward):
                 if d:
@@ -261,11 +261,13 @@ def main():
                         episode_success_rate.append(0)
                     episode_action_tokens_log_prob.append(action_tokens_log_prob[i].item())
                     running_episode_rewards[i] = 0
+                    tasks[i] = qs
             # bad_mask is a legacy implementation of the storage.py file
             bad_masks = torch.FloatTensor(
                 [[0.0] if 'bad_transition' in info.keys() else [1.0] for info in infos])
+            rollouts.insert_task(tasks, command)
             rollouts.insert(obs, output_id, action,
-                            action_log_prob, value, reward, masks, bad_masks)
+                            action_log_prob, value, reward, masks, bad_masks, random_mask)
             print("step: ", step)
         print("****** iteration number:{} ******".format(j))
         print("prompt:{}".format(prompt))

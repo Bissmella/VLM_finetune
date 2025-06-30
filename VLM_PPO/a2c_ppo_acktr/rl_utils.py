@@ -66,6 +66,8 @@ def get_prompt(env_name, action_only, infos = None):
 # Define the function that processes the list of strings according to the specified rules
 def text_projection(text_actions: List[str], env_name):
     output_indices = []
+    random_mask = []
+    text_actions = []
     if env_name == 'gym_cards/NumberLine-v0':
         action_list = ["-", "+"]
     elif env_name == 'gym_cards/Blackjack-v0':
@@ -81,7 +83,9 @@ def text_projection(text_actions: List[str], env_name):
     for string in text_actions:
         if not isinstance(string, str):
             # directly output a random action if the string is not a string
-            output_indices.append(random.randint(0, len(action_list) - 1))
+            output_indices.append(random_mask.randint(0, len(action_list) - 1))
+            random_mask.append(1)
+            text_actions.append(action_list[output_indices[-1]])
             continue
         string = string.lower()
         action_index = string.find('"action":')
@@ -101,8 +105,11 @@ def text_projection(text_actions: List[str], env_name):
         if len(contained_actions) == 1 and contained_actions[0] in action_list:
             # Only one keyword from action_list is in the string
             output_indices.append(action_list.index(contained_actions[0]))
+            random_mask.append(0)
         else:
             # The string contains none or multiple keywords, randomly select an index from action_list
-            output_indices.append(random.randint(0, len(action_list) - 1))
-    return torch.Tensor([output_indices]).long().reshape(-1, 1)
+            output_indices.append(random_mask.randint(0, len(action_list) - 1))
+            random_mask.append(1)
+        text_actions.append(action_list[output_indices[-1]])
+    return torch.Tensor([output_indices]).long().reshape(-1, 1), torch.Tensor([random_mask]).long().reshape(-1, 1), text_actions
 

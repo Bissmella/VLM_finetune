@@ -8,6 +8,11 @@ def _flatten_helper(T, N, _tensor):
 
 class RolloutStorage(object):
     def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens):
+        self.act_freq_reward = False
+        self.temp_pred_reward = False
+        self.task_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
+        self.action_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
+        self.random_mask = torch.zeros(num_steps, num_processes, action_shape)
         self.obs = torch.zeros(num_steps + 1, num_processes, *obs_shape)
         #hard-code to cases of max_new_tokens being smaller than 32
         self.output_ids = torch.zeros(
@@ -43,17 +48,21 @@ class RolloutStorage(object):
         self.masks = self.masks.to(device)
         self.bad_masks = self.bad_masks.to(device)
 
+    def insert_task(self, tasks, command):
+        self.task_texts[self.step] = tasks
+        self.action_texts[self.step] = command
     def insert(self, obs, output_ids, actions, action_log_probs,
-               value_preds, rewards, masks, bad_masks):
+               value_preds, rewards, masks, bad_masks, rand_mask):
         self.obs[self.step + 1].copy_(obs)
         self.output_ids[self.step].copy_(output_ids)
         self.actions[self.step].copy_(actions)
         self.action_log_probs[self.step].copy_(action_log_probs)
         self.value_preds[self.step].copy_(value_preds)
         self.rewards[self.step].copy_(rewards)
+        self.random_mask[self.step].copy_(rand_mask)  #action was selected randomly and does not come from policy
         self.masks[self.step + 1].copy_(masks)
         self.bad_masks[self.step + 1].copy_(bad_masks)
-
+        
         self.step = (self.step + 1) % self.num_steps
 
     def after_update(self):
@@ -130,3 +139,26 @@ class RolloutStorage(object):
 
             yield obs_batch, output_ids_batch, actions_batch, \
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
+            
+
+    def extract_trajectories(self):
+        actions_flattened = self.flatten_envs(self.action_texts)
+        tasks_flattened = self.flatten_envs(self.task_texts)
+        tasks_flattened = [t for t in tasks_flattened if t is not None]
+        masks_flattened = self.masks[:-1].view(-1, 1)
+        done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
+        trajectory_end = done_indices + 1  # since ends at t+1
+        trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
+        trajectory_lengths = (trajectory_end - trajectory_start).tolist()
+        return tasks_flattened, actions_flattened, trajectory_lengths
+
+
+    
+    def flatten_envs(self, elements):
+        num_envs = len(elements[0])
+        elements_flatten = []
+        for i in range(num_envs):
+            tmp_element = [ele[i] for ele in elements]
+            elements_flatten.extend(tmp_element)
+        return elements_flatten
+

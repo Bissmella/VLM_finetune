@@ -143,7 +143,8 @@ def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, proce
     
     if input is None:
         input = qwen_process(processor, text, image)
-    
+    output_ids = output_ids.to(value_model.base.device)
+    input = input.to(value_model.base.device)
     if input['input_ids'].size(0) != 1:
         input['input_ids'] = input['input_ids'].broadcast_to(output_ids.size(0), input['input_ids'].size(-1)) #Mking them with same batch size
     input['input_ids'] = torch.cat([input["input_ids"], output_ids], dim=1)

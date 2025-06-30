@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms as T
 
 from a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
 from a2c_ppo_acktr.utils import init
@@ -182,13 +183,21 @@ class QwenVLMPolicy(nn.Module):
         return self.value_model(input_ids = text, image = image)
 
     def evaluate_actions(self, inputs, output_ids, INPUT_IDS=None):
-        image_tensor = self.process_obs(inputs)
+        assert inputs.shape[0] == 1, "multip image in action evaluation!"
+        image_tensor = inputs.squeeze(0).permute(2,0,1).float() #TODO rollouts.obs[step] needs to be checked if expected shape
+        if image_tensor.max() <= 1.0:
+            image_tensor = (image_tensor * 255).byte()
+        to_pil = T.ToPILImage()
+        image = to_pil(image_tensor)
+        #image_tensor = self.process_obs(inputs)
         if INPUT_IDS is None:
             INPUT_IDS = self.INPUT_IDS
+        output_ids = output_ids.to(self.base.device)
         value, action_log_prob, _ = qwen_evaluate(value_model = self.value_model,
                                         output_ids = output_ids,
                                         temperature = self.args.temperature,
                                         thought_prob_coef = self.args.thought_prob_coef,
+                                        processor=self.processor,
                                         text = INPUT_IDS,
-                                        image = image_tensor,)
+                                        image = image,)
         return value, action_log_prob
