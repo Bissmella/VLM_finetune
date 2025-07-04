@@ -7,7 +7,7 @@ def _flatten_helper(T, N, _tensor):
 
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens):
+    def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens, temporal_predictor=None):
         self.obs = torch.zeros(num_steps + 1, num_processes, *obs_shape)
         #hard-code to cases of max_new_tokens being smaller than 32
         self.output_ids = torch.zeros(
@@ -31,6 +31,7 @@ class RolloutStorage(object):
 
         self.num_steps = num_steps
         self.step = 0
+        self.temporal_predictor = temporal_predictor
 
     def to(self, device):
         self.obs = self.obs.to(device)

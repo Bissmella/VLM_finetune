@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
@@ -181,6 +182,7 @@ class QwenVLMPolicy(nn.Module):
                                                     image=image,
                                                     args = self.args)
         action, random_mask, command = self.projection_f(text_action)
+        
         return value, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob
 
     def get_value(self, image, text=None):
@@ -208,7 +210,7 @@ class QwenVLMPolicy(nn.Module):
                                         image = image,)
         return value, action_log_prob
     
-
+@dataclass
 class Qwen2VLCausalLMOutputWithPast(ModelOutput):
     """
     Base class for Qwen2VL causal language model (or autoregressive) outputs.
@@ -250,13 +252,14 @@ class QwenTempPredictor(nn.Module):
     def __init__(self,
                 processor,
                 base,
-                args,
-                INPUT_IDS,
+                args=None,
+                INPUT_IDS= None,
                 base_kwargs=None):
         super(QwenTempPredictor, self).__init__()
         self.base = base
         self.processor = processor
         self.args = args
+        self.config = base.config
 
     def forward(
         self,
@@ -331,7 +334,7 @@ class QwenTempPredictor(nn.Module):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.model(
+        outputs = self.base(
             input_ids=input_ids,
             pixel_values=pixel_values,
             pixel_values_videos=pixel_values_videos,
@@ -347,9 +350,9 @@ class QwenTempPredictor(nn.Module):
             return_dict=return_dict,
             cache_position=cache_position,
         )
-
-        hidden_states = outputs[0]
-        logits = self.lm_head(hidden_states)
+        
+        #hidden_states = outputs.hidden_states#outputs[0]
+        logits = outputs.logits#outputs[0]#self.base.lm_head(hidden_states)
 
         loss = None
         if labels is not None:

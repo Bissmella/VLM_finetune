@@ -19,10 +19,11 @@ torch.backends.cuda.enable_mem_efficient_sdp(False)  #disabling cutlass not work
 torch.backends.cuda.enable_flash_sdp(False)
 
 from a2c_ppo_acktr import algo, utils, rl_utils
+from a2c_ppo_acktr.temp_predictor import Temp_predictor
 from a2c_ppo_acktr.rl_utils import get_prompt, text_projection
 from a2c_ppo_acktr.arguments import get_args
 from a2c_ppo_acktr.envs import make_vec_envs
-from a2c_ppo_acktr.model import VLMPolicy, VLMValue, QwenVLMValue, QwenVLMPolicy
+from a2c_ppo_acktr.model import VLMPolicy, VLMValue, QwenVLMValue, QwenVLMPolicy, QwenTempPredictor
 from a2c_ppo_acktr.storage import RolloutStorage
 from a2c_ppo_acktr.llava_interface import llava_evaluate, llava_generate
 from a2c_ppo_acktr.llava_interface import init_pretrained_model, find_all_linear_names, load_lora_model
@@ -144,6 +145,9 @@ def main():
         print("Environment not supported")
         exit(1)
 
+    if True:
+        temporal_predictor_model = QwenTempPredictor(processor, base)
+        temporal_predictor = Temp_predictor(temporal_predictor_model, processor)
 
     obs = envs.reset()
     infos = None
@@ -190,14 +194,14 @@ def main():
             save_dir=args.save_dir)
 
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
-                              envs.observation_space.shape, envs.action_space, args.max_new_tokens)
-    breakpoint()
+                              envs.observation_space.shape, envs.action_space, args.max_new_tokens, temporal_predictor)
+    
     image_tensor = obs.squeeze(0).permute(2,0,1).float()
     if image_tensor.max() <= 1.0:
         image_tensor = (image_tensor * 255).byte()
     to_pil = T.ToPILImage()
     image = to_pil(image_tensor)
-    _, output_ids, action, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
+    _, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
     print("action:{}".format(action))
     print("action_log_prob:{}".format(action_log_prob))
     print("action_tokens_log_prob:{}".format(action_tokens_log_prob))
@@ -224,7 +228,7 @@ def main():
     prev_infos = []
     infos = []
     for j in tqdm(range(num_updates)):
-
+        n_start = False
         for step in range(args.num_steps):
             # Sample actions
             with torch.no_grad():
@@ -236,7 +240,7 @@ def main():
                     image_tensor = (image_tensor * 255).byte()
                 to_pil = T.ToPILImage()
                 image = to_pil(image_tensor)
-                value, output_id, action, action_log_prob, action_tokens_log_prob = actor_critic.act(
+                value, output_id, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(
                         image, text = INPUT_IDS)
             text_action = processor.decode(list(filter(lambda num: num != 151643, output_id[0].tolist()))) #151643 is the pad_token for the qwen model #TODO hardcoded
             prev_infos = copy.deepcopy(infos)
@@ -251,8 +255,11 @@ def main():
             masks = torch.FloatTensor(
                 [[0.0] if done_ else [1.0] for done_ in done])
 
+            tasks = [None] * args.num_processes
             running_episode_rewards += reward.flatten()
             for i, d, r in zip(range(args.num_processes), done, reward):
+                if n_start or step == 0:
+                    tasks[i] = qs
                 if d:
                     episode_rewards.append(running_episode_rewards[i].item())
                     if running_episode_rewards[i] > 0:
@@ -261,11 +268,16 @@ def main():
                         episode_success_rate.append(0)
                     episode_action_tokens_log_prob.append(action_tokens_log_prob[i].item())
                     running_episode_rewards[i] = 0
+                    n_start = True
+                else:
+                    n_start = False
+                
             # bad_mask is a legacy implementation of the storage.py file
             bad_masks = torch.FloatTensor(
                 [[0.0] if 'bad_transition' in info.keys() else [1.0] for info in infos])
+            rollouts.insert_task(tasks, command)
             rollouts.insert(obs, output_id, action,
-                            action_log_prob, value, reward, masks, bad_masks)
+                            action_log_prob, value, reward, masks, bad_masks, random_mask)
             print("step: ", step)
         print("****** iteration number:{} ******".format(j))
         print("prompt:{}".format(prompt))

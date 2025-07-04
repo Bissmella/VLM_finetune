@@ -1,6 +1,7 @@
 import torch
 import math
 from qwen_vl_utils import process_vision_info
+import torchvision.transforms as T
 from torch.nn.utils.rnn import pad_sequence
 def split_list(lst, n):
     """Split a list into n (roughly) equal-sized chunks"""
@@ -197,15 +198,26 @@ def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, proce
 
 
 
-def qwen_process(processor, text, image):
+def qwen_process(processor, text, image=None):
     #TODO make sure that image is Image.Image type and not tensor
     messages=[]
     message={"role":"user"}
-    content= [
-        {"type": "image",
-         "image": image,},
-        {"type": "text", "text": text},
-    ]
+    if image is not None:
+        if isinstance(image, torch.Tensor):
+            image_tensor = image.squeeze(0).permute(2,0,1).float()
+            if image_tensor.max() <= 1.0:
+                image_tensor = (image_tensor * 255).byte()
+            to_pil = T.ToPILImage()
+            image = to_pil(image_tensor)
+        content= [
+            {"type": "image",
+            "image": image,},
+            {"type": "text", "text": text},
+        ]
+    else:
+        content= [
+            {"type": "text", "text": text},
+        ]
     message["content"]=content
     messages.append(message)
     # prompt_input = qwen_format(text, image)
@@ -219,3 +231,105 @@ def qwen_process(processor, text, image):
             padding_side="left",
             return_tensors="pt",)
     return input
+
+
+
+def qwen_batch_process(processor, texts, images=None):
+    """
+    Batch processing for Qwen multimodal model.
+    Args:
+        processor: Hugging Face Qwen processor
+        texts (List[str]): List of texts
+        images (List[Union[PIL.Image, Tensor, None]]): List of images or None
+
+    Returns:
+        Batch dict with tokenized inputs
+    """
+    assert isinstance(texts, list), "texts should be a list of strings"
+    if images is not None:
+        assert len(texts) == len(images), "texts and images must be the same length"
+
+    messages_batch = []
+    image_inputs_batch = []
+    video_inputs_batch = []
+
+    to_pil = T.ToPILImage()
+
+    for i, text in enumerate(texts):
+        image = images[i] if images is not None else None
+
+        #processor requires image in PIL format
+        if isinstance(image, torch.Tensor):
+            image_tensor = image.squeeze(0).permute(2, 0, 1).float()
+            if image_tensor.max() <= 1.0:
+                image_tensor = (image_tensor * 255).byte()
+            image = to_pil(image_tensor)
+        
+        message = {"role": "user"}
+        if image is not None:
+            content = [
+                {"type": "image", "image": image},
+                {"type": "text", "text": text},
+            ]
+        else:
+            content = [{"type": "text", "text": text}]
+
+        message["content"] = content
+        messages_batch.append([message])  #Note: outer list because processor expects batch of conversations
+
+    #prepare multimodal for input into processor
+    prompt_texts = [
+        processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        for messages in messages_batch
+    ]
+    image_inputs_batch, video_inputs_batch = zip(*[
+        process_vision_info(messages) for messages in messages_batch
+    ])
+
+    inputs = processor(
+        text=prompt_texts,
+        images=list(image_inputs_batch),
+        videos=list(video_inputs_batch),
+        padding=True,
+        return_tensors="pt",
+    )
+    return inputs
+
+
+def format_data_sft(sample):
+    image = sample["image"]
+    if isinstance(image, torch.Tensor):
+            if image.ndim == 4:
+                image_tensor = image.squeeze(0).permute(2,0,1).float()
+            else:
+                image_tensor = image.permute(2, 0, 1).float()
+            try:
+                if image_tensor.max() <= 1.0:
+                    image_tensor = (image_tensor * 255)#.to(torch.uint8)#.byte()
+            except:
+                breakpoint()
+            to_pil = T.ToPILImage()
+            image = to_pil(image_tensor)
+    return [
+        # {
+        #     "role": "system",
+        #     "content": [{"type": "text", "text": system_message}],
+        # },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": image,
+                },
+                {
+                    "type": "text",
+                    "text": sample["query"],
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": sample["label"]}],
+        },
+    ]

@@ -34,3 +34,9 @@ Installing collected packages: safetensors, hf-xet, huggingface-hub, tokenizers,
 
 ***the gym-cards  sft weights are in the following link but files too big:
 https://huggingface.co/datasets/LEVI-Project/sft-model-data/tree/main
+
+
+/home/bahaduri/RL4VLM/VLM_PPO/a2c_ppo_acktr/envs.py
+to make the VLM_PPO work with minigrid environment
+line 38-40 was added
+lines 64 - 65 was also added

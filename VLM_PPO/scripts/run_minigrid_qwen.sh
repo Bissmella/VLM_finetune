@@ -1,5 +1,5 @@
 TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES="0" accelerate launch --num_processes=1 --config_file config_zero2.yaml --main_process_port 29488 ../main_minigrid.py \
-    --env-name MiniGrid-MultiRoom-N6-v0 \
+    --env-name MiniGrid-MultiRoom-N4-S5-v0 \
     --init-lr 1e-5 \
     --end-lr 1e-9 \
     --lr_max_steps 25 \

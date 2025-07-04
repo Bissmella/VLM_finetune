@@ -8,6 +8,7 @@ import os
 import time
 from collections import deque
 
+import minigrid
 import gymnasium as gym
 import gym_cards
 import numpy as np
@@ -18,11 +19,11 @@ import torch.optim as optim
 torch.backends.cuda.enable_mem_efficient_sdp(False)  #disabling cutlass not working on small gpus
 torch.backends.cuda.enable_flash_sdp(False)
 
-from a2c_ppo_acktr import algo, utils, rl_utils
+from a2c_ppo_acktr import algo, utils, rl_utils, Temp_predictor
 from a2c_ppo_acktr.rl_utils import get_prompt, text_projection
 from a2c_ppo_acktr.arguments import get_args
 from a2c_ppo_acktr.envs import make_vec_envs
-from a2c_ppo_acktr.model import VLMPolicy, VLMValue, QwenVLMValue, QwenVLMPolicy
+from a2c_ppo_acktr.model import VLMPolicy, VLMValue, QwenVLMValue, QwenVLMPolicy, QwenTempPredictor
 from a2c_ppo_acktr.storage import RolloutStorage
 from a2c_ppo_acktr.llava_interface import llava_evaluate, llava_generate
 from a2c_ppo_acktr.llava_interface import init_pretrained_model, find_all_linear_names, load_lora_model
@@ -136,7 +137,7 @@ def main():
         base.set_adapter("policy")
     value_model = QwenVLMValue(base, processor)
     value_model = value_model.to(model_device)
-    breakpoint()
+
     if "gym_cards" or "minigrid" in args.env_name.lower():
         envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
                              args.gamma, None, device, False, 1)
@@ -144,7 +145,9 @@ def main():
         print("Environment not supported")
         exit(1)
 
-    
+    if True:
+        temporal_predictor_model = QwenTempPredictor(processor, base)
+        temporal_predictor = Temp_predictor(temporal_predictor_model, processor)
     obs = envs.reset()
     infos = None
     ## Inputing Prompt here
@@ -188,10 +191,10 @@ def main():
             args.entropy_coef,
             max_grad_norm=args.max_grad_norm,
             save_dir=args.save_dir)
-
+    
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
                               envs.observation_space.shape, envs.action_space, args.max_new_tokens)
-    breakpoint()
+    
     image_tensor = obs.squeeze(0).permute(2,0,1).float()
     if image_tensor.max() <= 1.0:
         image_tensor = (image_tensor * 255).byte()
@@ -240,6 +243,7 @@ def main():
                         image, text = INPUT_IDS)
             text_action = processor.decode(list(filter(lambda num: num != 151643, output_id[0].tolist()))) #151643 is the pad_token for the qwen model #TODO hardcoded
             prev_infos = copy.deepcopy(infos)
+            
             obs, reward, done, infos = envs.step(action)
 
             qs = get_prompt(args.env_name, args.action_only_prompt, infos)
@@ -265,7 +269,7 @@ def main():
             # bad_mask is a legacy implementation of the storage.py file
             bad_masks = torch.FloatTensor(
                 [[0.0] if 'bad_transition' in info.keys() else [1.0] for info in infos])
-            rollouts.insert_task(tasks, command)
+            rollouts.insert_task(tasks, command)  #TODO check command is a nice list
             rollouts.insert(obs, output_id, action,
                             action_log_prob, value, reward, masks, bad_masks, random_mask)
             print("step: ", step)

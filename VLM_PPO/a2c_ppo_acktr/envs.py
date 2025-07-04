@@ -1,6 +1,7 @@
 import os
 
 # import gym
+from minigrid.wrappers import ImgObsWrapper
 import gymnasium as gym
 import numpy as np
 import torch
@@ -34,9 +35,12 @@ def make_env(env_id, seed, rank, log_dir, allow_early_resets, use_cnn=False):
             _, domain, task = env_id.split('.')
             env = dmc2gym.make(domain_name=domain, task_name=task)
             env = ClipAction(env)
+        elif "MiniGrid" in env_id:
+            env = gym.make(env_id, render_mode="rgb_array")
+            env = ImgObsWrapper(env)
         else:
             env = gym.make(env_id)
-
+        
         is_atari = "ALE" in env_id
 
         if is_atari:
@@ -57,6 +61,8 @@ def make_env(env_id, seed, rank, log_dir, allow_early_resets, use_cnn=False):
                 env = EpisodicLifeEnv(env)
                 if "FIRE" in env.unwrapped.get_action_meanings():
                     env = FireResetEnv(env)
+        elif "MiniGrid" in env_id:
+            pass
         elif len(env.observation_space.shape) == 3:
             pass
 
