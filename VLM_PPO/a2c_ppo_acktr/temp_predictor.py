@@ -14,10 +14,23 @@ from a2c_ppo_acktr.llava_interface import qwen_process, qwen_batch_process, form
 from qwen_vl_utils import process_vision_info
 from transformers import Qwen2VLProcessor
 # from datasets import Dataset
+import accelerate
 
 ALF_ACTION_LIST=["pass", "goto", "pick", "put", "open", "close", "toggle", "heat", "clean", "cool", "slice", "inventory", "examine", "look"]
 
 
+
+def dict_mean(dict_list):
+    mean_dict = {}
+    if len(dict_list) > 0:
+        for key in dict_list[0].keys():
+            if "min" in key:
+                mean_dict[key] = min(d[key] for d in dict_list)
+            elif "max" in key:
+                mean_dict[key] = max(d[key] for d in dict_list)
+            else:
+                mean_dict[key] = sum(d[key] for d in dict_list) / len(dict_list)
+    return mean_dict
 
 
 
@@ -32,12 +45,13 @@ class TrajectoryDataset(Dataset):
         return len(self.encodings["input_ids"])
 
 class TrajectoryDatasetList(Dataset):
-    def __init__(self, encodings, rnd_masks):
+    def __init__(self, encodings, rnd_masks, bad_masks):
         self.encodings = encodings
         self.rnd_masks = rnd_masks
+        self.bad_masks = bad_masks
 
     def __getitem__(self, idx):
-        return self.encodings[idx], self.rnd_masks[idx]  # simply return the dict at index `idx`
+        return self.encodings[idx] , self.rnd_masks[idx], self.bad_masks[idx]  # simply return the dict at index `idx`
 
     def __len__(self):
         return len(self.encodings)
@@ -73,6 +87,7 @@ class Temp_predictor():
         tokenizer = T5Tokenizer.from_pretrained("t5-small")
         model = T5Model.from_pretrained("t5-small")
         """
+        self.accelerator = accelerate.Accelerator()
         self.act_sep_token = '||'  #special action seperator token
         self.processor = processor#T5TokenizerFast.from_pretrained("t5-small", extra_special_tokens={"act_token": self.act_sep_token})
         self.model = model
@@ -86,13 +101,19 @@ class Temp_predictor():
         # self.model.base.resize_token_embeddings(len(self.processor.tokenizer))
         self.act_sep_token_id = self.processor.tokenizer.encode(" " + self.act_sep_token)  #space is because one space coming before it changes the token id
         #self.temp_model_optimizer = self.accelerator.prepare(self.temp_model_optimizer)
+        self.model.base.set_adapter('adversery')
         self.model.to(self.device)
-
+        self.model, self.temp_model_optimizer = self.accelerator.prepare(self.model, self.temp_model_optimizer)
         #trajectories buffer
         self.input_seq_buffer = deque(maxlen=buff_size)
         self.target_seq_buffer = deque(maxlen=buff_size)
 
+        #trajectories buffer for multimodal that will store dictionaries of trajectory
+        self.trajs_buffer = deque(maxlen=buff_size)
+        self.trajs_rndMask_buffer = deque(maxlen=buff_size)
+        self.trajs_badMask_buffer = deque(maxlen=buff_size)
         self.spec_gen_token = "%generate%"
+        breakpoint()
         
         
 
@@ -113,11 +134,9 @@ class Temp_predictor():
         return list(self.input_seq_buffer), list(self.target_seq_buffer)
     
 
-    def preprocess_mm_trajectories(self, buffer_goals, buffer_actions, buffer_obs, buffer_trajLen):
+    def preprocess_mm_trajectories(self, buffer_goals, buffer_actions, buffer_obs, buffer_trajLen, random_masks, bad_masks):
+        #TODO add terminals to add trajectory only if it is terminated for updating the model
         trajs = []
-        input_seq = []
-        target_seq = []
-        obs_seq = []
         counter = 0
         for i, seg_len in enumerate(buffer_trajLen):
             traj = {}
@@ -128,10 +147,12 @@ class Temp_predictor():
             traj["image"] =buffer_obs[i]
             traj["query"] = buffer_goals[i]
             traj["label"] = flattened_acts
+            #traj["rnd_mask"] = random_masks[i]
             trajs.append(traj)
-            # input_seq.append(buffer_goals[i])
-            # target_seq.append(acts)
-            # obs_seq.append(buffer_obs[i])
+            self.trajs_buffer.append(traj)
+            self.trajs_rndMask_buffer.append(random_masks[i])
+            self.trajs_badMask_buffer.append(bad_masks[i])
+            
         return trajs##input_seq, target_seq, obs_seq
     
     def process_mm(self, trajectories):
@@ -149,6 +170,7 @@ class Temp_predictor():
         # Get the texts and images, and apply the chat template
         examples = [example[0] for example in input]
         random_masks = [example[1] for example in input]
+        bad_masks = [example[2] for example in input]
         texts = [
             self.processor.apply_chat_template(example, tokenize=False) for example in examples
         ]  # Prepare texts for processing
@@ -168,7 +190,7 @@ class Temp_predictor():
             image_tokens = [151652, 151653, 151655]  # Specific image token IDs for Qwen2VLProcessor
         else:
             image_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)]  # Convert image token to ID
-        labels, batch_slices = self.assign_random_mask_weights(labels, random_masks)
+        labels, batch_slices = self.assign_random_mask_weights(labels, random_masks, bad_masks)
         pattern = torch.tensor([1018, 19366, 4], device=labels.device)   #that is fixed token id of a special token  " %generate% "
         match = (labels.unfold(1, len(pattern), 1) == pattern).all(-1)
         first_match = torch.where(match.any(1), match.float().argmax(1), torch.full((labels.size(0),), labels.size(1), device=labels.device))
@@ -243,7 +265,7 @@ class Temp_predictor():
                                     )
                 loss, logits = outputs[0].loss, outputs[0].logits  #TODO  3 is placeholder for the logits #outputs.loss, outputs.logits
                 #self.accelerator.backward(loss)
-                loss.backward()
+                self.accelerator.backward(loss)
                 epoch_loss += loss.item()
                 preds = torch.argmax(logits, dim=-1)
                 mask = labels != -100
@@ -260,15 +282,61 @@ class Temp_predictor():
 
         info.update(dict_mean(info_list))
         return info
+    
 
+    def update_mm_model(self):
+        trajs = self.trajs_buffer
+        random_masks = self.trajs_rndMask_buffer
+        bad_masks = self.trajs_badMask_buffer
+        trajs = [format_data_sft(traj) for traj in trajs]
+        
+        trajs_dataset = TrajectoryDatasetList(trajs, random_masks, bad_masks)
 
-    def update_mm_model(self, buffer_goals, buffer_trajLen, buffer_actions, buffer_obs, terminals=None):
-        input_seq, img_seq, target_seq = self.preprocess_mm_trajectories(buffer_goals, buffer_trajLen, buffer_actions, buffer_obs, terminals)
-        raw_dataset = Dataset.from_dict({"text": input_seq, "image": img_seq, "target": target_seq})
-        processed_dataset = raw_dataset.map(self.process_mm, batched=True)
+        train_loader = DataLoader(trajs_dataset, batch_size=8, collate_fn=self.collate_fn, shuffle=True)
+        train_loader = self.accelerator.prepare(train_loader)
+        info = {}
+        info_list = []
 
-        dataloader = DataLoader(processed_dataset, batch_size=8)
-        pass
+        self.model.base.set_adapter('adversery')
+        self.model.train()
+        for _ in tqdm(range(self.epochs)):
+            self.temp_model_optimizer.zero_grad()
+            epoch_loss= 0
+            correct = 0
+            total = 0
+            for batch, _ in train_loader:
+                
+                labels = batch['labels']
+                outputs = self.model(**batch,
+                                        output_hidden_states = True,
+                                        # decoder_input_ids=labels_input_ids,
+                                        # decoder_attention_mask=labels_attention_mask,
+                                        #TODO loss_weights
+                                        )
+                loss = outputs[0].loss.view(batch['input_ids'].shape)
+                loss = torch.mean(loss)
+                logits = outputs[0].logits  #TODO  3 is placeholder for the logits #outputs.loss, outputs.logits
+                #self.accelerator.backward(loss)
+                breakpoint()
+                self.accelerator.backward(loss)
+                epoch_loss += loss.item()
+                preds = torch.argmax(logits, dim=-1)
+                mask = labels != -100
+                correct += ((preds == labels) & mask).sum().item()
+                total += mask.sum().item()
+            avg_epoch_loss = epoch_loss / len(train_loader)
+            train_accuracy = correct / total
+            info_list.append({"temp_predictor.loss": avg_epoch_loss, "temp_predictor.acc": train_accuracy})
+            #self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            #torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            self.temp_model_optimizer.step()
+            torch.cuda.empty_cache()
+            gc.collect()
+
+        info.update(dict_mean(info_list))
+
+        self.model.base.set_adapter('policy')
+        return info
             
 
 
@@ -335,6 +403,7 @@ class Temp_predictor():
         input: a string, mainly the trajectory's goal
         target: list of strings, mainly the trajectory's actions
         """
+        self.model.base.set_adapter('adversery')
         self.model.eval()
         target = f" {self.act_sep_token} ".join(target)
         model_inputs = self.tokenizer(
@@ -385,24 +454,28 @@ class Temp_predictor():
         action_loss_normalized = np.array([s.mean().item() for s in loss_sliced])
         epsilon = 1e-8
         final_loss = (action_loss_normalized - np.min(action_loss_normalized))/(np.max(action_loss_normalized) - np.min(action_loss_normalized) + epsilon)
+
+        self.model.base.set_adapter('policy')
+
         return final_loss
     
 
-    def compute_novelty_batch(self, inputs, targets, images, traj_lens,  random_masks=None):
+    def compute_novelty_batch(self, inputs, targets, images, traj_lens,  random_masks=None, bad_masks=None):
         """
         computes novelty of batch of trajectories involving multimodality.
         input:
         target:
         image:
-        random_masks
+        random_masks:
+        bad_masks: 
         """
         self.model.eval()
-        trajs = self.preprocess_mm_trajectories(inputs, targets, images, traj_lens)
+        trajs = self.preprocess_mm_trajectories(inputs, targets, images, traj_lens, random_masks, bad_masks) #TODO udpate the preprocess for bad_masks, collate_fn as well
         try:
             trajs = [format_data_sft(traj) for traj in trajs]
         except:
             breakpoint()
-        trajs_dataset = TrajectoryDatasetList(trajs, random_masks)
+        trajs_dataset = TrajectoryDatasetList(trajs, random_masks, bad_masks)
 
         data_loader = DataLoader(trajs_dataset, batch_size=8, collate_fn=self.collate_fn, shuffle=False)
         losses = []
@@ -421,7 +494,7 @@ class Temp_predictor():
                                         #TODO loss_weights
                                         )
                     loss = outputs[0].loss.view(batch['input_ids'].shape)
-                    breakpoint()  #TODO  more processing to assign loss to each of the actions
+                    
                     action_slices = [
                                 [slice(start, end) for start, end in zip(s[:, 0].tolist(), s[:, 1].tolist())]
                                 if s is not None else None
@@ -443,15 +516,14 @@ class Temp_predictor():
                     # #seperators = [[slice[0, 0].item() + slice[:, 1].tolist()] for slice in batch_slices]
                     # slices = [torch.cat([torch.arange(*slicee) for slicee in inverse_slices]) for inverse_slices in batch_slices]
                     # losses.append(loss)
-        breakpoint()
-        losses = torch.stack(losses)
-
-
         
-        pass
+        losses = torch.cat(losses, dim=0)
+        epsilon = 1e-8
+        final_loss = (losses - torch.min(losses))/(torch.max(losses) - torch.min(losses) + epsilon)
+        return final_loss
 
     
-    def assign_random_mask_weights(self, labels, random_masks):
+    def assign_random_mask_weights(self, labels, random_masks, bad_masks):
         """
         Makes the random_masks match the tokens.
         texts: list(str), list of action sequences
@@ -470,7 +542,8 @@ class Temp_predictor():
         except:
             breakpoint()
         batch_slices = []
-        for indices, first, label, random_mask in zip (indices_per_row, first_match, labels, random_masks):
+        
+        for indices, first, label, random_mask, bad_mask in zip (indices_per_row, first_match, labels, random_masks, bad_masks):
             indices_mask = (indices > first)
             indices = indices[indices_mask]
             len_label = torch.Tensor([len(label)], device=label.device).int() # dtype=torch.long,
@@ -499,6 +572,9 @@ class Temp_predictor():
                 slices = torch.cat([torch.arange(*slicee) for slicee in slices])
                 slices = slices.int()
                 label[slices] = -100
+            if bad_mask == 0:
+                if label[-2:] == torch.tensor([151645, 198], device=labels.device).all():
+                    labels[-2:] = -100
             batch_slices.append(inverse_slices)
         return labels, batch_slices
 

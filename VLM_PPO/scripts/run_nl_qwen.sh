@@ -1,4 +1,4 @@
-TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES="0" accelerate launch --num_processes=1 --config_file config_zero2.yaml --main_process_port 29488 ../main_qwen.py \
+TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES="0" TORCH_SHOW_CPP_STACKTRACES=1 accelerate launch --num_processes=1 --config_file config_zero2.yaml --main_process_port 29488 ../main_qwen.py \
     --env-name gym_cards/NumberLine-v0 \
     --init-lr 1e-5 \
     --end-lr 1e-9 \

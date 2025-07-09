@@ -152,28 +152,37 @@ class RolloutStorage(object):
             
     def get_temp_rewards(self, temp_predictor):
         tasks, actions, traj_lens = self.extract_trajectories()
-        traj_starts, _ = self.get_traj_start_end()
-        traj_starts_indices = traj_starts + 1
+        traj_starts, _, _ = self.get_trajectory_bounds_flat()
+        traj_starts_indices = traj_starts
         obs_flattened = self.obs[:-1].view(-1, *self.obs.size()[2:])
+        
         start_obs = obs_flattened[traj_starts_indices]
         temp_rewards = []
         
         random_masks_flattened = self.random_mask.permute(1, 0, 2).contiguous()
         random_masks_flattened = random_masks_flattened.view(-1)
         random_masks = []
+
+        bad_masks_flattened = self.bad_masks[1:, :, :]
+        bad_masks_flattened = bad_masks_flattened.permute(1, 0, 2).contiguous()
+        bad_masks_flattened = bad_masks_flattened.view(-1)
+        bad_masks = []
+        
         counter =0
         for i, seg_len in enumerate(traj_lens):
             random_masks.append(random_masks_flattened[counter: counter + seg_len])
+            bad_masks.append(bad_masks_flattened[counter+seg_len -1])
             counter += seg_len
-        temp_rewards = temp_predictor.compute_novelty_batch(tasks, actions, start_obs, traj_lens, random_masks)
-        counter =0
-        for task, obs, traj_len in zip(tasks, start_obs,  traj_lens):
-            temp_reward = temp_predictor.compute_novelty(task, actions[counter: counter + traj_len], obs).tolist()
-            temp_reward.append(0) #TODO check if adding 0 is correct, normally the advantage for each trajectory is len of n+1; if n then it should be removed
+        temp_rewards = temp_predictor.compute_novelty_batch(tasks, actions, start_obs, traj_lens, random_masks, bad_masks)
+        
+        # counter =0
+        # for task, obs, traj_len in zip(tasks, start_obs,  traj_lens):
+        #     temp_reward = temp_predictor.compute_novelty(task, actions[counter: counter + traj_len], obs).tolist()
+        #     temp_reward.append(0) #TODO check if adding 0 is correct, normally the advantage for each trajectory is len of n+1; if n then it should be removed
 
-            temp_rewards.extend(temp_reward)
-            counter += traj_len
-        return torch.Tensor(temp_rewards)
+        #     temp_rewards.extend(temp_reward)
+        #     counter += traj_len
+        return temp_rewards
 
     def extract_trajectories(self):
         actions_flattened = self.flatten_envs(self.action_texts)
@@ -204,14 +213,16 @@ class RolloutStorage(object):
     def compute_freq_reward(self, scale=0.0096):
         # Update count
         actions_flattened = self.flatten_envs(self.action_texts)
-        masks_flattened = self.masks.view(-1)
-        done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
-        trajectory_end = done_indices  # since ends at t
-        T = masks_flattened.shape[0] - 1
-        if trajectory_end.numel() == 0 or trajectory_end[-1].item() < T:
-            trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
-        trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
-        trajectory_lengths = (trajectory_end - trajectory_start).tolist()
+        # masks_flattened = self.masks.view(-1)
+        # done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
+        # trajectory_end = done_indices  # since ends at t
+        # T = masks_flattened.shape[0] - 1
+        # if trajectory_end.numel() == 0 or trajectory_end[-1].item() < T:
+        #     trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
+        # trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
+        # trajectory_lengths = (trajectory_end - trajectory_start).tolist()
+        trajectory_lengths, trajectory_end, trajectory_lengths = self.get_trajectory_bounds_flat()
+        trajectory_lengths = trajectory_lengths.tolist()
         counter = 0
         freq_reward = []
         for traj_len in trajectory_lengths:
@@ -226,6 +237,8 @@ class RolloutStorage(object):
     
     def get_traj_start_end(self):
         masks_flattened = self.masks.view(-1)
+        masks_flattened = self.masks.permute(1, 0, 2)
+        masks_flattened = masks_flattened.view(-1)
         done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
         trajectory_end = done_indices  # since ends at t
         T = masks_flattened.shape[0] - 1
@@ -233,5 +246,52 @@ class RolloutStorage(object):
             trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
         trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
         return trajectory_start, trajectory_end
+    
+    def get_traj_start_end2(self):
+        #TODO   do start and end in multidim, can't be done easily in flattened way. or in a foor loop seperately for each process
+        masks_flattened = self.masks[:-1]
+        masks_flattened = masks_flattened.permute(1, 0, 2) #step, num_processes
+        masks_flattened[0] = 0   #first step is start for all processes
+        masks_flattened = masks_flattened.view(-1)
+        done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
+        trajectory_start = done_indices
+        #trajectory_start = torch.cat([[torch.tensor([0], device =done_indices.device), trajectory_start]])
+        trjaectory_end = done_indices -1
+        T = masks_flattened.shape[0]
+        trajectory_end = done_indices  # since ends at t
+        T = masks_flattened.shape[0] - 1
+        if trajectory_end.numel() == 0 or trajectory_end[-1].item() < T:
+            trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
+        trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
+        return trajectory_start, trajectory_end
+    
+    def get_trajectory_bounds_flat(self):
+        masks = self.masks[:-1]
+        masks = masks.permute(1, 0, 2)
+        masks = masks.squeeze(-1)  # shape: [num_procs, steps]
+        num_procs, steps = masks.shape
+
+        is_reset = (masks == 0)
+        is_reset[:, 0] = True  # force first timestep as start
+
+        # Find (proc_id, timestep) for starts and ends
+        starts = is_reset.nonzero(as_tuple=False)
+
+        padded_reset = torch.concatenate(
+            [is_reset[:, 1:], torch.ones((num_procs, 1), dtype=bool, device=masks.device)],
+            dim=1
+        )
+        ends = padded_reset.nonzero(as_tuple=False)
+        # Sort by process id then timestep
+        # order = torch.lexsort((starts[:, 1], starts[:, 0]))
+        # starts = starts[order]
+        # ends = ends[order]
+
+        # Compute FLATTENED indices in [num_procs * steps] space
+        flat_starts = starts[:, 0] * steps + starts[:, 1]
+        flat_ends = ends[:, 0] * steps + ends[:, 1]
+        lengths = flat_ends - flat_starts
+
+        return flat_starts.squeeze(), flat_ends.squeeze(), lengths.squeeze()
 
 

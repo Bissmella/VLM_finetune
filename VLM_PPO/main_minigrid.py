@@ -19,7 +19,8 @@ import torch.optim as optim
 torch.backends.cuda.enable_mem_efficient_sdp(False)  #disabling cutlass not working on small gpus
 torch.backends.cuda.enable_flash_sdp(False)
 
-from a2c_ppo_acktr import algo, utils, rl_utils, Temp_predictor
+from a2c_ppo_acktr import algo, utils, rl_utils
+from a2c_ppo_acktr.temp_predictor import Temp_predictor
 from a2c_ppo_acktr.rl_utils import get_prompt, text_projection
 from a2c_ppo_acktr.arguments import get_args
 from a2c_ppo_acktr.envs import make_vec_envs
@@ -152,7 +153,7 @@ def main():
     infos = None
     ## Inputing Prompt here
     qs = get_prompt(args.env_name, args.action_only_prompt, infos)
-    qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
+    #qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
     conv = conv_templates[args.conv_mode].copy()
     conv.append_message(conv.roles[0], qs)
     conv.append_message(conv.roles[1], None)
@@ -193,10 +194,10 @@ def main():
             save_dir=args.save_dir)
     
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
-                              envs.observation_space.shape, envs.action_space, args.max_new_tokens)
+                              envs.observation_space.shape, envs.action_space, args.max_new_tokens, temporal_predictor)
     
     image_tensor = obs.squeeze(0).permute(2,0,1).float()
-    if image_tensor.max() <= 1.0:
+    if image_tensor.max().item() <= 1.0:
         image_tensor = (image_tensor * 255).byte()
     to_pil = T.ToPILImage()
     image = to_pil(image_tensor)
@@ -215,7 +216,7 @@ def main():
     start = time.time()
     num_updates = int(
         args.num_env_steps) // args.num_steps // args.num_processes
-    if args.use_wandb:
+    if args.use_wandb: #TODO wandb
         import wandb
         run_name = args.wandb_run + "-" + args.env_name
         wandb.init(project=args.wandb_project, name=run_name, group=run_name, config=args)
@@ -227,7 +228,7 @@ def main():
     prev_infos = []
     infos = []
     for j in tqdm(range(num_updates)):
-
+        n_start = False
         for step in range(args.num_steps):
             # Sample actions
             with torch.no_grad():
@@ -247,16 +248,20 @@ def main():
             obs, reward, done, infos = envs.step(action)
 
             qs = get_prompt(args.env_name, args.action_only_prompt, infos)
-            qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
+            #qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
             conv = conv_templates[args.conv_mode].copy()
             conv.append_message(conv.roles[0], qs)
             conv.append_message(conv.roles[1], None)
             prompt = conv.get_prompt()
             masks = torch.FloatTensor(
                 [[0.0] if done_ else [1.0] for done_ in done])
-            tasks = [None] * args.num_processes
+            tasks = [None] * args.num_processes               # tasks is used for storing the trajectory 
+                                                              # and passing it to buffer. if trajectory starts newly
+                                                              # it will be set to qs otherwise None.
             running_episode_rewards += reward.flatten()
             for i, d, r in zip(range(args.num_processes), done, reward):
+                if n_start or step == 0:
+                    tasks[i] = qs
                 if d:
                     episode_rewards.append(running_episode_rewards[i].item())
                     if running_episode_rewards[i] > 0:
@@ -265,7 +270,10 @@ def main():
                         episode_success_rate.append(0)
                     episode_action_tokens_log_prob.append(action_tokens_log_prob[i].item())
                     running_episode_rewards[i] = 0
-                    tasks[i] = qs
+                    #tasks[i] = qs
+                    n_start = True
+                else:
+                    n_start = False
             # bad_mask is a legacy implementation of the storage.py file
             bad_masks = torch.FloatTensor(
                 [[0.0] if 'bad_transition' in info.keys() else [1.0] for info in infos])
@@ -276,13 +284,13 @@ def main():
         print("****** iteration number:{} ******".format(j))
         print("prompt:{}".format(prompt))
         print("text_action:{}".format(text_action))
-        print("current observation:{}".format(prev_infos))
+        #print("current observation:{}".format(prev_infos))
         print("ground truth:{}".format(infos))
         print("action log prob:{}".format(action_log_prob))
         print("action tokens log prob:{}".format(action_tokens_log_prob))
         with torch.no_grad():
             image_tensor = rollouts.obs[-1].squeeze(0).permute(2,0,1).float()
-            if image_tensor.max() <= 1.0:
+            if image_tensor.max().item() <= 1.0:
                 image_tensor = (image_tensor * 255).byte()
             to_pil = T.ToPILImage()
             image = to_pil(image_tensor)
@@ -293,6 +301,7 @@ def main():
                                  args.gae_lambda, args.use_proper_time_limits)
         value_loss, action_loss, dist_entropy = agent.update(rollouts, update_num=j)
         lr_scheduler.step()
+        tmp_info = temporal_predictor.update_mm_model()
 
         rollouts.after_update()
         if len(episode_rewards) > 1:
@@ -332,7 +341,8 @@ def main():
                         "value.max": rollouts.value_preds.max().item(),
                         "value.min": rollouts.value_preds.min().item(),
                         "value.mean": rollouts.value_preds.mean().item(),
-                        "value.std": rollouts.value_preds.std().item(),})
+                        "value.std": rollouts.value_preds.std().item(),
+                        })
 
 if __name__ == "__main__":
     main()

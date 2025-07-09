@@ -18,6 +18,9 @@ import torch.optim as optim
 torch.backends.cuda.enable_mem_efficient_sdp(False)  #disabling cutlass not working on small gpus
 torch.backends.cuda.enable_flash_sdp(False)
 
+import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
 from a2c_ppo_acktr import algo, utils, rl_utils
 from a2c_ppo_acktr.temp_predictor import Temp_predictor
 from a2c_ppo_acktr.rl_utils import get_prompt, text_projection
@@ -145,15 +148,13 @@ def main():
         print("Environment not supported")
         exit(1)
 
-    if True:
-        temporal_predictor_model = QwenTempPredictor(processor, base)
-        temporal_predictor = Temp_predictor(temporal_predictor_model, processor)
+    
 
     obs = envs.reset()
     infos = None
     ## Inputing Prompt here
     qs = get_prompt(args.env_name, args.action_only_prompt, infos)
-    qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
+    #qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
     conv = conv_templates[args.conv_mode].copy()
     conv.append_message(conv.roles[0], qs)
     conv.append_message(conv.roles[1], None)
@@ -178,7 +179,13 @@ def main():
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.lr_max_steps, eta_min=args.end_lr)
 
     AcceleratorState().deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu'] = 1
+    if True: #TODO add this in config instead of hardcode
+        base.set_adapter('adversery')
+        temporal_predictor_model = QwenTempPredictor(processor, base)
+        temporal_predictor = Temp_predictor(temporal_predictor_model, processor)
 
+    actor_critic.base.set_adapter('policy')
+    actor_critic.value_model.base.set_adapter('policy')
     actor_critic, optimizer, lr_scheduler = accelerator.prepare(actor_critic, optimizer, lr_scheduler)
 
     agent = algo.PPO(
@@ -197,7 +204,7 @@ def main():
                               envs.observation_space.shape, envs.action_space, args.max_new_tokens, temporal_predictor)
     
     image_tensor = obs.squeeze(0).permute(2,0,1).float()
-    if image_tensor.max() <= 1.0:
+    if image_tensor.max().item() <= 1.0:
         image_tensor = (image_tensor * 255).byte()
     to_pil = T.ToPILImage()
     image = to_pil(image_tensor)
@@ -236,7 +243,7 @@ def main():
                 # INPUT_IDS[INPUT_IDS == 0] = 259 # 869: . (period), 29871: SPIECE, 259: whitespace
 
                 image_tensor = rollouts.obs[step].squeeze(0).permute(2,0,1).float() #TODO rollouts.obs[step] needs to be checked if expected shape
-                if image_tensor.max() <= 1.0:
+                if image_tensor.max().item() <= 1.0:
                     image_tensor = (image_tensor * 255).byte()
                 to_pil = T.ToPILImage()
                 image = to_pil(image_tensor)
@@ -247,7 +254,7 @@ def main():
             obs, reward, done, infos = envs.step(action)
 
             qs = get_prompt(args.env_name, args.action_only_prompt, infos)
-            qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
+            #qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
             conv = conv_templates[args.conv_mode].copy()
             conv.append_message(conv.roles[0], qs)
             conv.append_message(conv.roles[1], None)
@@ -288,7 +295,7 @@ def main():
         print("action tokens log prob:{}".format(action_tokens_log_prob))
         with torch.no_grad():
             image_tensor = rollouts.obs[-1].squeeze(0).permute(2,0,1).float()
-            if image_tensor.max() <= 1.0:
+            if image_tensor.max().item() <= 1.0:
                 image_tensor = (image_tensor * 255).byte()
             to_pil = T.ToPILImage()
             image = to_pil(image_tensor)
@@ -299,7 +306,8 @@ def main():
                                  args.gae_lambda, args.use_proper_time_limits)
         value_loss, action_loss, dist_entropy = agent.update(rollouts, update_num=j)
         lr_scheduler.step()
-
+        tmp_info = temporal_predictor.update_mm_model()
+        breakpoint()
         rollouts.after_update()
         if len(episode_rewards) > 1:
             total_num_steps = (j + 1) * args.num_processes * args.num_steps

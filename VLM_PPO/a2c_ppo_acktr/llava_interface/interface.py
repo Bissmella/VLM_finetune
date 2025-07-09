@@ -303,11 +303,10 @@ def format_data_sft(sample):
                 image_tensor = image.squeeze(0).permute(2,0,1).float()
             else:
                 image_tensor = image.permute(2, 0, 1).float()
-            try:
-                if image_tensor.max() <= 1.0:
-                    image_tensor = (image_tensor * 255)#.to(torch.uint8)#.byte()
-            except:
-                breakpoint()
+            
+            if image_tensor.max().item() <= 1.0:
+                image_tensor = (image_tensor * 255)#.to(torch.uint8)#.byte()
+            
             to_pil = T.ToPILImage()
             image = to_pil(image_tensor)
     return [
