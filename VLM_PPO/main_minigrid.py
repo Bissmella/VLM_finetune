@@ -179,6 +179,7 @@ def main():
 
     AcceleratorState().deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu'] = 1
 
+    
     actor_critic, optimizer, lr_scheduler = accelerator.prepare(actor_critic, optimizer, lr_scheduler)
 
     agent = algo.PPO(

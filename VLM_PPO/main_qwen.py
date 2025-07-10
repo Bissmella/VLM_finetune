@@ -55,8 +55,34 @@ from accelerate.state import AcceleratorState
 from PIL import Image
 import torchvision.transforms as T
 
+import math
+
 import warnings
 warnings.filterwarnings("ignore")
+
+
+
+def freeze_all_except_adapter(model, active_adapter_name):
+    for name, param in model.named_parameters():
+        if f"lora_A.{active_adapter_name}" in name or f"lora_B.{active_adapter_name}" in name:
+            param.requires_grad = True
+        elif "lora_A." in name or "lora_B." in name:
+            param.requires_grad = False
+
+
+def cosine_schedule(step, T_max, eta_min, base_lr):
+    """
+    Returns the LR multiplier at step `step`, where:
+    - T_max is the total number of steps (like in CosineAnnealingLR)
+    - eta_min is the final LR (absolute)
+    - base_lr is the starting LR (absolute)
+
+    Output is a multiplier relative to base_lr.
+    """
+    if step >= T_max:
+        return eta_min / base_lr  # stays flat after schedule ends
+    cosine_decay = 0.5 * (1 + math.cos(math.pi * step / T_max))
+    return (eta_min + (base_lr - eta_min) * cosine_decay) / base_lr
 
 def main():
     args = get_args()
@@ -70,7 +96,8 @@ def main():
 
     torch.set_num_threads(1)
 
-    accelerator = accelerate.Accelerator(gradient_accumulation_steps=args.grad_accum_steps)
+    accelerator = accelerate.Accelerator(gradient_accumulation_steps=args.grad_accum_steps, mixed_precision="fp16")
+    second_accelerator = accelerate.Accelerator()
     device = accelerator.device
     ## environment interaction device is cpu
     model_device = device
@@ -172,22 +199,54 @@ def main():
                              projection_f=projection_f,
                              INPUT_IDS=INPUT_IDS,
                              args=args)
+    for key, param in actor_critic.value_model.named_parameters():
+        if param.requires_grad:
+            print(key)
     
-    optimizer = optim.Adam(actor_critic.value_model.parameters(), lr=args.init_lr, eps=args.eps, weight_decay=args.weight_decay)
+    optimizer_grouped_parameters = [
+        {
+            'params': [p for n, p in actor_critic.value_model.named_parameters() if ("lora_A.adversery" in n or "lora_B.adversery" in n)], 'lr': 3e-4,
+        },
+        {
+          'params': [p for n, p in actor_critic.value_model.named_parameters() if ("lora_A.adversery" not in n and "lora_B.adversery" not in n)], 'weight_decay': args.weight_decay, 'lr': args.init_lr, 'eps':args.eps,
+          }
+    ]
+    optimizer = optim.Adam(optimizer_grouped_parameters)#actor_critic.value_model.parameters(), lr=args.init_lr, eps=args.eps, weight_decay=args.weight_decay)
 
+    lr_scheduler = optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=[
+            lambda step: cosine_schedule(step, args.lr_max_steps, args.end_lr, args.init_lr),
+            lambda step: 1.0,
+        ]
+    )
+    for i, group in enumerate(optimizer.param_groups):
+        print(f"Group {i}: lr={group['lr']}, #params={len(group['params'])}")
     # https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.CosineAnnealingLR.html
-    lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.lr_max_steps, eta_min=args.end_lr)
+    #lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.lr_max_steps, eta_min=args.end_lr)
 
     AcceleratorState().deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu'] = 1
-    if True: #TODO add this in config instead of hardcode
-        base.set_adapter('adversery')
-        temporal_predictor_model = QwenTempPredictor(processor, base)
-        temporal_predictor = Temp_predictor(temporal_predictor_model, processor)
+    
+    # if True: #TODO add this in config instead of hardcode
+        
+    #     temporal_predictor_model = QwenTempPredictor(processor, base)
+    #     freeze_all_except_adapter(temporal_predictor_model.base, 'adversery')
+    #     temporal_predictor_model.base.set_adapter('adversery')
+    #     temp_trainable_params = [p for p in temporal_predictor_model.parameters() if p.requires_grad]
+    #     temp_model_optimizer = torch.optim.Adam(temp_trainable_params, lr= 3e-4)
+        
+    #     temporal_predictor_model, temp_model_optimizer = second_accelerator.prepare(temporal_predictor_model, temp_model_optimizer)
+    #     temporal_predictor = Temp_predictor(temporal_predictor_model, processor, temp_model_optimizer, second_accelerator)
 
+    # freeze_all_except_adapter(actor_critic.base, 'policy')
+    # freeze_all_except_adapter(actor_critic.value_model.base, 'policy')
+    # actor_critic.base.set_adapter('policy')
+    # actor_critic.value_model.base.set_adapter('policy')
+    actor_critic, optimizer, lr_scheduler = accelerator.prepare(actor_critic, optimizer, lr_scheduler)#, temporal_predictor_model)
+    if True:
+        temporal_predictor = Temp_predictor(actor_critic.value_model, processor, optimizer, accelerator)
     actor_critic.base.set_adapter('policy')
     actor_critic.value_model.base.set_adapter('policy')
-    actor_critic, optimizer, lr_scheduler = accelerator.prepare(actor_critic, optimizer, lr_scheduler)
-
     agent = algo.PPO(
             actor_critic,
             optimizer,

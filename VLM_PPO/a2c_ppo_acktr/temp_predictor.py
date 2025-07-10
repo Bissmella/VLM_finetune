@@ -13,6 +13,7 @@ from collections import deque
 from a2c_ppo_acktr.llava_interface import qwen_process, qwen_batch_process, format_data_sft
 from qwen_vl_utils import process_vision_info
 from transformers import Qwen2VLProcessor
+from peft import get_peft_model_state_dict
 # from datasets import Dataset
 import accelerate
 
@@ -80,30 +81,46 @@ class CustomCollator:
         return batch_out
 
 
+def freeze_all_except_adapter(model, active_adapter_name):
+    for name, param in model.named_parameters():
+        if f"lora_A.{active_adapter_name}" in name or f"lora_B.{active_adapter_name}" in name:
+            param.requires_grad = True
+        elif "lora_A." in name or "lora_B." in name:
+            param.requires_grad = False
+
+
+
 class Temp_predictor():
-    def __init__(self, model, processor, epochs=4, temp_model_lr=3e-4, buff_size=160):
+    def __init__(self, model, processor, optimizer, accelerator, epochs=4, temp_model_lr=3e-4, buff_size=160):
 
         """
         tokenizer = T5Tokenizer.from_pretrained("t5-small")
         model = T5Model.from_pretrained("t5-small")
         """
-        self.accelerator = accelerate.Accelerator()
+        self.accelerator = accelerator#accelerate.Accelerator()
         self.act_sep_token = '||'  #special action seperator token
         self.processor = processor#T5TokenizerFast.from_pretrained("t5-small", extra_special_tokens={"act_token": self.act_sep_token})
-        self.model = model
+        # self.model = model
+        # #breakpoint()
+        # self.model.base.set_adapter('adversery')
         #self.model = T5ForConditionalGeneration.from_pretrained("t5-small")
-        self.temp_model_optimizer = torch.optim.Adam(self.model.parameters(), lr = temp_model_lr)
+        # freeze_all_except_adapter(self.model.base, "adversery")
+        # trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+        # adapter_params = get_peft_model_state_dict(self.model.base, adapter_name="adversery")
+        self.temp_model_optimizer = optimizer#torch.optim.Adam(trainable_params, lr= temp_model_lr)#self.model.parameters(), lr = temp_model_lr)
         self.device = model.base.device
         #self.accelerator = accelerator
         self.epochs = epochs
-        
+        self.model = model
         # self.processor.tokenizer.add_special_tokens({'additional_special_tokens': [self.act_sep_token]})  #action seperator token  additional_special_tokens   act_token
         # self.model.base.resize_token_embeddings(len(self.processor.tokenizer))
         self.act_sep_token_id = self.processor.tokenizer.encode(" " + self.act_sep_token)  #space is because one space coming before it changes the token id
         #self.temp_model_optimizer = self.accelerator.prepare(self.temp_model_optimizer)
-        self.model.base.set_adapter('adversery')
-        self.model.to(self.device)
-        self.model, self.temp_model_optimizer = self.accelerator.prepare(self.model, self.temp_model_optimizer)
+        
+        #self.model.to(self.device)
+        #adapter_state_dict = get_peft_model_state_dict(self.model.base)
+        #breakpoint()
+        #self.model, self.temp_model_optimizer = self.accelerator.prepare(self.model, self.temp_model_optimizer)
         #trajectories buffer
         self.input_seq_buffer = deque(maxlen=buff_size)
         self.target_seq_buffer = deque(maxlen=buff_size)
@@ -113,7 +130,14 @@ class Temp_predictor():
         self.trajs_rndMask_buffer = deque(maxlen=buff_size)
         self.trajs_badMask_buffer = deque(maxlen=buff_size)
         self.spec_gen_token = "%generate%"
-        breakpoint()
+        # for name, param in self.model.named_parameters():
+        #     if hasattr(param, 'ds_id'):
+        #         print(f"{name} is managed by deepspeed!")
+        # breakpoint()
+        # print("here")
+        #adapter_state_dict = get_peft_model_state
+        #_dict(self.model.base)
+        #breakpoint()
         
         
 
@@ -265,7 +289,8 @@ class Temp_predictor():
                                     )
                 loss, logits = outputs[0].loss, outputs[0].logits  #TODO  3 is placeholder for the logits #outputs.loss, outputs.logits
                 #self.accelerator.backward(loss)
-                self.accelerator.backward(loss)
+                #self.accelerator.backward(loss)
+                loss.backward()
                 epoch_loss += loss.item()
                 preds = torch.argmax(logits, dim=-1)
                 mask = labels != -100
@@ -296,7 +321,7 @@ class Temp_predictor():
         train_loader = self.accelerator.prepare(train_loader)
         info = {}
         info_list = []
-
+        #freeze_all_except_adapter(self.model.base, "adversery")
         self.model.base.set_adapter('adversery')
         self.model.train()
         for _ in tqdm(range(self.epochs)):
@@ -307,8 +332,8 @@ class Temp_predictor():
             for batch, _ in train_loader:
                 
                 labels = batch['labels']
-                outputs = self.model(**batch,
-                                        output_hidden_states = True,
+                outputs = self.model(inputs = batch,
+                                        #output_hidden_states = True,
                                         # decoder_input_ids=labels_input_ids,
                                         # decoder_attention_mask=labels_attention_mask,
                                         #TODO loss_weights
@@ -317,7 +342,8 @@ class Temp_predictor():
                 loss = torch.mean(loss)
                 logits = outputs[0].logits  #TODO  3 is placeholder for the logits #outputs.loss, outputs.logits
                 #self.accelerator.backward(loss)
-                breakpoint()
+                #breakpoint()
+                #loss.backward()
                 self.accelerator.backward(loss)
                 epoch_loss += loss.item()
                 preds = torch.argmax(logits, dim=-1)
@@ -334,7 +360,7 @@ class Temp_predictor():
             gc.collect()
 
         info.update(dict_mean(info_list))
-
+        #freeze_all_except_adapter(self.model.base, "policy")
         self.model.base.set_adapter('policy')
         return info
             
@@ -403,6 +429,7 @@ class Temp_predictor():
         input: a string, mainly the trajectory's goal
         target: list of strings, mainly the trajectory's actions
         """
+        freeze_all_except_adapter(self.model.base, "adversery")
         self.model.base.set_adapter('adversery')
         self.model.eval()
         target = f" {self.act_sep_token} ".join(target)
@@ -455,6 +482,7 @@ class Temp_predictor():
         epsilon = 1e-8
         final_loss = (action_loss_normalized - np.min(action_loss_normalized))/(np.max(action_loss_normalized) - np.min(action_loss_normalized) + epsilon)
 
+        freeze_all_except_adapter(self.model.base, "policy")
         self.model.base.set_adapter('policy')
 
         return final_loss
@@ -487,8 +515,8 @@ class Temp_predictor():
                     #loss_weights = batch['weights'].to(self.device) #TODO to be done
                     #labels_attention_mask = label['attention_mask'].to(self.device)
 
-                    outputs = self.model(**batch,
-                                        output_hidden_states = True,
+                    outputs = self.model(inputs = batch,
+                                        #output_hidden_states = True,
                                         # decoder_input_ids=labels_input_ids,
                                         # decoder_attention_mask=labels_attention_mask,
                                         #TODO loss_weights
