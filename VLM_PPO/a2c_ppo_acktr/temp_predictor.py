@@ -46,13 +46,14 @@ class TrajectoryDataset(Dataset):
         return len(self.encodings["input_ids"])
 
 class TrajectoryDatasetList(Dataset):
-    def __init__(self, encodings, rnd_masks, bad_masks):
+    def __init__(self, encodings, rnd_masks, bad_masks, status):
         self.encodings = encodings
         self.rnd_masks = rnd_masks
         self.bad_masks = bad_masks
+        self.status = status
 
     def __getitem__(self, idx):
-        return self.encodings[idx] , self.rnd_masks[idx], self.bad_masks[idx]  # simply return the dict at index `idx`
+        return self.encodings[idx] , self.rnd_masks[idx], self.bad_masks[idx], self.status[idx]  # simply return the dict at index `idx`
 
     def __len__(self):
         return len(self.encodings)
@@ -158,7 +159,7 @@ class Temp_predictor():
         return list(self.input_seq_buffer), list(self.target_seq_buffer)
     
 
-    def preprocess_mm_trajectories(self, buffer_goals, buffer_actions, buffer_obs, buffer_trajLen, random_masks, bad_masks):
+    def preprocess_mm_trajectories(self, buffer_goals, buffer_actions, buffer_obs, buffer_trajLen, random_masks, bad_masks, status=None):
         #TODO add terminals to add trajectory only if it is terminated for updating the model
         trajs = []
         counter = 0
@@ -195,6 +196,9 @@ class Temp_predictor():
         examples = [example[0] for example in input]
         random_masks = [example[1] for example in input]
         bad_masks = [example[2] for example in input]
+        status = [example[3] for example in input]
+        
+        status = torch.tensor(status, dtype=torch.long)
         texts = [
             self.processor.apply_chat_template(example, tokenize=False) for example in examples
         ]  # Prepare texts for processing
@@ -231,7 +235,7 @@ class Temp_predictor():
         batch['attention_mask'] = batch['attention_mask'].to(self.device)
         batch['pixel_values'] = batch['pixel_values'].to(self.device)
         batch['image_grid_thw'] = batch['image_grid_thw'].to(self.device)
-        return batch, batch_slices
+        return batch, batch_slices, status
     
     def preprocess_data(self, examples):
         model_inputs = self.tokenizer(examples["input"], truncation=True, padding=False)
@@ -329,7 +333,7 @@ class Temp_predictor():
             epoch_loss= 0
             correct = 0
             total = 0
-            for batch, _ in train_loader:
+            for batch, _, _ in train_loader:
                 
                 labels = batch['labels']
                 outputs = self.model(inputs = batch,
@@ -488,7 +492,7 @@ class Temp_predictor():
         return final_loss
     
 
-    def compute_novelty_batch(self, inputs, targets, images, traj_lens,  random_masks=None, bad_masks=None):
+    def compute_novelty_batch(self, inputs, targets, images, traj_lens,  random_masks=None, bad_masks=None, status=None):
         """
         computes novelty of batch of trajectories involving multimodality.
         input:
@@ -498,17 +502,17 @@ class Temp_predictor():
         bad_masks: 
         """
         self.model.eval()
-        trajs = self.preprocess_mm_trajectories(inputs, targets, images, traj_lens, random_masks, bad_masks) #TODO udpate the preprocess for bad_masks, collate_fn as well
+        trajs = self.preprocess_mm_trajectories(inputs, targets, images, traj_lens, random_masks, bad_masks, status) #TODO udpate the preprocess for bad_masks, collate_fn as well
         try:
             trajs = [format_data_sft(traj) for traj in trajs]
         except:
             breakpoint()
-        trajs_dataset = TrajectoryDatasetList(trajs, random_masks, bad_masks)
+        trajs_dataset = TrajectoryDatasetList(trajs, random_masks, bad_masks, status)
 
         data_loader = DataLoader(trajs_dataset, batch_size=8, collate_fn=self.collate_fn, shuffle=False)
         losses = []
         with torch.no_grad():
-            for batch, batch_slices in data_loader:
+            for batch, batch_slices, status in data_loader:
                     input_ids = batch['input_ids'].to(self.device)
                     input_attention_mask = batch['attention_mask'].to(self.device)
                     labels = batch['labels'].to(self.device)
@@ -539,8 +543,11 @@ class Temp_predictor():
                         torch.tensor([s.sum().item() for s in sliced], device=sliced[0].device)
                         for sliced in loss_sliced
                     ]
-
-                    losses.extend(action_loss_aggregated)
+                    
+                    #setting the loss for succcessful trajs to 0
+                    status = 1- status  #converting status -->  1: failed,  0: success
+                    action_loss_final = [loss * stat for loss, stat in zip(action_loss_aggregated, status)]
+                    losses.extend(action_loss_final)
                     # #seperators = [[slice[0, 0].item() + slice[:, 1].tolist()] for slice in batch_slices]
                     # slices = [torch.cat([torch.arange(*slicee) for slicee in inverse_slices]) for inverse_slices in batch_slices]
                     # losses.append(loss)

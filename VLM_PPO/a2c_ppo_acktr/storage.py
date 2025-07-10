@@ -11,6 +11,7 @@ class RolloutStorage(object):
         self.act_freq_reward = True
         self.temp_pred_reward = True
         self.task_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
+        self.status = [[None for _ in range(num_processes)] for _ in range(num_steps)]
         self.action_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
         if action_space.__class__.__name__ == 'Discrete':
             action_shape = 1
@@ -53,9 +54,10 @@ class RolloutStorage(object):
         self.masks = self.masks.to(device)
         self.bad_masks = self.bad_masks.to(device)
 
-    def insert_task(self, tasks, command):
+    def insert_task(self, tasks, command, status):
         self.task_texts[self.step] = tasks
         self.action_texts[self.step] = command
+        self.status[self.step] = status
     def insert(self, obs, output_ids, actions, action_log_probs,
                value_preds, rewards, masks, bad_masks, rand_mask):
         self.obs[self.step + 1].copy_(obs)
@@ -127,6 +129,7 @@ class RolloutStorage(object):
             temp_rewards = self.get_temp_rewards(self.temporal_predictor)
         if self.act_freq_reward:
             freq_rewards = self.compute_freq_reward()
+        breakpoint()
         sampler = BatchSampler(
             SubsetRandomSampler(range(batch_size)),
             mini_batch_size,
@@ -151,7 +154,7 @@ class RolloutStorage(object):
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
             
     def get_temp_rewards(self, temp_predictor):
-        tasks, actions, traj_lens = self.extract_trajectories()
+        tasks, actions, traj_lens, status = self.extract_trajectories()
         traj_starts, _, _ = self.get_trajectory_bounds_flat()
         traj_starts_indices = traj_starts
         obs_flattened = self.obs[:-1].view(-1, *self.obs.size()[2:])
@@ -173,7 +176,8 @@ class RolloutStorage(object):
             random_masks.append(random_masks_flattened[counter: counter + seg_len])
             bad_masks.append(bad_masks_flattened[counter+seg_len -1])
             counter += seg_len
-        temp_rewards = temp_predictor.compute_novelty_batch(tasks, actions, start_obs, traj_lens, random_masks, bad_masks)
+        
+        temp_rewards = temp_predictor.compute_novelty_batch(tasks, actions, start_obs, traj_lens, random_masks, bad_masks, status)
         
         # counter =0
         # for task, obs, traj_len in zip(tasks, start_obs,  traj_lens):
@@ -187,18 +191,22 @@ class RolloutStorage(object):
     def extract_trajectories(self):
         actions_flattened = self.flatten_envs(self.action_texts)
         tasks_flattened = self.flatten_envs(self.task_texts)
+        status_flattened = self.flatten_envs(self.status)
         
+        status_flattened = [s for s in status_flattened if s is not None]
         tasks_flattened = [t for t in tasks_flattened if t is not None]
-        masks_flattened = self.masks.view(-1)
-        done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
-        trajectory_end = done_indices  # since ends at t
-        T = masks_flattened.shape[0] - 1
-        if trajectory_end.numel() == 0 or trajectory_end[-1].item() < T:
-            trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
-        trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
-        trajectory_lengths = (trajectory_end - trajectory_start).tolist()
+        #masks_flattened = self.masks.view(-1)
+        # done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
+        # trajectory_end = done_indices  # since ends at t
+        # T = masks_flattened.shape[0] - 1
+        # if trajectory_end.numel() == 0 or trajectory_end[-1].item() < T:
+        #     trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
+        # trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
+        # trajectory_lengths = (trajectory_end - trajectory_start).tolist()
+        _, _, trajectory_lengths = self.get_trajectory_bounds_flat()
+        trajectory_lengths = trajectory_lengths.tolist()
         
-        return tasks_flattened, actions_flattened, trajectory_lengths
+        return tasks_flattened, actions_flattened, trajectory_lengths, status_flattened
 
 
     
@@ -221,7 +229,7 @@ class RolloutStorage(object):
         #     trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
         # trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
         # trajectory_lengths = (trajectory_end - trajectory_start).tolist()
-        trajectory_lengths, trajectory_end, trajectory_lengths = self.get_trajectory_bounds_flat()
+        trajectory_start, trajectory_end, trajectory_lengths = self.get_trajectory_bounds_flat()
         trajectory_lengths = trajectory_lengths.tolist()
         counter = 0
         freq_reward = []
@@ -291,7 +299,8 @@ class RolloutStorage(object):
         flat_starts = starts[:, 0] * steps + starts[:, 1]
         flat_ends = ends[:, 0] * steps + ends[:, 1]
         lengths = flat_ends - flat_starts
-
+        lengths = lengths + 1
+        
         return flat_starts.squeeze(), flat_ends.squeeze(), lengths.squeeze()
 
 

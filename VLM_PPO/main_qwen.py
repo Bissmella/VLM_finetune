@@ -96,7 +96,7 @@ def main():
 
     torch.set_num_threads(1)
 
-    accelerator = accelerate.Accelerator(gradient_accumulation_steps=args.grad_accum_steps, mixed_precision="fp16")
+    accelerator = accelerate.Accelerator(gradient_accumulation_steps=args.grad_accum_steps)#, mixed_precision="fp16")
     second_accelerator = accelerate.Accelerator()
     device = accelerator.device
     ## environment interaction device is cpu
@@ -311,7 +311,6 @@ def main():
             text_action = processor.decode(list(filter(lambda num: num != 151643, output_id[0].tolist()))) #151643 is the pad_token for the qwen model #TODO hardcoded
             prev_infos = copy.deepcopy(infos)
             obs, reward, done, infos = envs.step(action)
-
             qs = get_prompt(args.env_name, args.action_only_prompt, infos)
             #qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
             conv = conv_templates[args.conv_mode].copy()
@@ -322,6 +321,7 @@ def main():
                 [[0.0] if done_ else [1.0] for done_ in done])
 
             tasks = [None] * args.num_processes
+            status = [None] * args.num_processes
             running_episode_rewards += reward.flatten()
             for i, d, r in zip(range(args.num_processes), done, reward):
                 if n_start or step == 0:
@@ -330,8 +330,10 @@ def main():
                     episode_rewards.append(running_episode_rewards[i].item())
                     if running_episode_rewards[i] > 0:
                         episode_success_rate.append(1)
+                        status[i] = 1
                     else:
                         episode_success_rate.append(0)
+                        status[i] = 0
                     episode_action_tokens_log_prob.append(action_tokens_log_prob[i].item())
                     running_episode_rewards[i] = 0
                     n_start = True
@@ -341,7 +343,7 @@ def main():
             # bad_mask is a legacy implementation of the storage.py file
             bad_masks = torch.FloatTensor(
                 [[0.0] if 'bad_transition' in info.keys() else [1.0] for info in infos])
-            rollouts.insert_task(tasks, command)
+            rollouts.insert_task(tasks, command, status)
             rollouts.insert(obs, output_id, action,
                             action_log_prob, value, reward, masks, bad_masks, random_mask)
             print("step: ", step)
