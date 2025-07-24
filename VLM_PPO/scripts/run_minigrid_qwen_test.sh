@@ -1,15 +1,13 @@
 DEVICES="0"
 NUM_PROCESS=1
-SEED=$1                #1            # 
-WANDB_RUN=$2     #"run1"      #
-SAVE_DIR=$3            #"/home/bahaduri/RL4VLM/outputs/vlm_1"      #"./"   #
-PORT=$4           #29488           #          #29488
-TEMP_PREDICTOR_FLAG=$5                          #"--temp-predictor"             ##"--temp-predictor"
-ACT_FREQ_REWARD_FLAG=$6                              #"--act-freq-reward"     #""
-GROUP=$7                                               "vlm-tmp-cur"
-RLEF_FLAG=$8
-USE_WANDB_FLAG="--use-wandb"            #""              #
-
+SEED=2            # $1                #
+WANDB_RUN="run1"      #$2     #
+SAVE_DIR="/home/bahaduri/RL4VLM/outputs/tmp"      #"./"   #$3            #
+PORT=29488           #          #29488  $4           #
+TEMP_PREDICTOR_FLAG=""                     #"--temp-predictor"             ##"--temp-predictor"
+ACT_FREQ_REWARD_FLAG=""                      #"--act-freq-reward"     #""
+USE_WANDB_FLAG=""              #"--use-wandb"            #
+GROUP="vlm"
 
 if [ ! -d "$SAVE_DIR" ]; then
     mkdir -p "$SAVE_DIR"
@@ -17,11 +15,11 @@ if [ ! -d "$SAVE_DIR" ]; then
 fi
 
 TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero2.yaml --main_process_port $PORT ../main_minigrid.py \
-    --env-name MiniGrid-DoorKey-6x6-v0 \
+    --env-name MiniGrid-MultiRoom-N2-S4-v0 \
     --init-lr 1e-5 \
     --end-lr 1e-9 \
     --lr_max_steps 25 \
-    --eval-num-per-episode 6 \
+    --eval-num-per-episode 200 \
     --num-env-steps 15000 \
     --num-steps 512 \
     --grad-accum-steps 128 \
@@ -30,14 +28,12 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --n
     --use-gae \
     --seed $SEED \
     --temperature 0.2 \
-    --ppo-epoch 3 \
+    --ppo-epoch 4 \
     --mini-batch-size 1 \
     --model-path "Qwen/Qwen2-VL-2B-Instruct" \
     --use-lora \
     --train-vision all \
     --save-dir "$SAVE_DIR" \
-    --action-sampling  \
-    $RLEF_FLAG \
     $ACT_FREQ_REWARD_FLAG \
     $TEMP_PREDICTOR_FLAG \
     $USE_WANDB_FLAG \

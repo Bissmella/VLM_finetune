@@ -7,9 +7,14 @@ def _flatten_helper(T, N, _tensor):
 
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens, temporal_predictor=None):
-        self.act_freq_reward = True
-        self.temp_pred_reward = True
+    def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens, temporal_predictor=None, act_freq_reward=False, scale = 0.006):
+        self.act_freq_reward = act_freq_reward
+        self.temporal_predictor = temporal_predictor
+        if self.temporal_predictor:  # is not None
+            self.temp_pred_reward = True
+        else:
+            self.temp_pred_reward = False
+        
         self.task_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
         self.status = [[None for _ in range(num_processes)] for _ in range(num_steps)]
         self.action_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
@@ -42,6 +47,7 @@ class RolloutStorage(object):
         self.num_steps = num_steps
         self.step = 0
         self.temporal_predictor = temporal_predictor
+        self.int_reward_scale = scale
 
     def to(self, device):
         self.obs = self.obs.to(device)
@@ -82,7 +88,8 @@ class RolloutStorage(object):
                         use_gae,
                         gamma,
                         gae_lambda,
-                        use_proper_time_limits=True):
+                        use_proper_time_limits=True,
+                        num_update = 0):
         if use_proper_time_limits:
             if use_gae:
                 self.value_preds[-1] = next_value
@@ -117,23 +124,54 @@ class RolloutStorage(object):
                 for step in reversed(range(self.rewards.size(0))):
                     self.returns[step] = self.returns[step + 1] * \
                         gamma * self.masks[step + 1] + self.rewards[step]
+        print("shape of returns: *****", self.returns.shape)
+        if self.act_freq_reward:
+            self.freq_rewards = self.compute_freq_reward(scale=self.int_reward_scale)
+        self.temp_rewards = torch.zeros((1))
+        if self.temp_pred_reward:
+            temp_rewards = self.get_temp_rewards(self.temporal_predictor)
+            temp_rewards = temp_rewards * self.int_reward_scale
+            
+            if num_update > 0:
+                self.temp_rewards = temp_rewards
 
     def feed_forward_generator(self,
                                advantages,
                                mini_batch_size=None,
+                               update_num=0
                                ):
         num_steps, num_processes = self.rewards.size()[0:2]
         batch_size = num_processes * num_steps
-
+        
         if self.temp_pred_reward:
-            temp_rewards = self.get_temp_rewards(self.temporal_predictor)
+            temp_rewards = self.temp_rewards#self.get_temp_rewards(self.temporal_predictor)
         if self.act_freq_reward:
-            freq_rewards = self.compute_freq_reward()
-        breakpoint()
+            freq_rewards = self.freq_rewards
+            print("freq shape: ", freq_rewards.shape)
+        if self.temp_pred_reward or self.act_freq_reward:
+            if update_num > 0:
+                print("tmp rewards: ", self.temp_rewards.shape)
+                freq_rewards = self.freq_rewards.to(self.temp_rewards.device)
+                self.temp_rewards += freq_rewards
+            else:
+                self.temp_rewards = self.freq_rewards
+        
+            temp_rewards = self.temp_rewards[:, None, None].to(advantages.device)
+            advantages += temp_rewards
         sampler = BatchSampler(
             SubsetRandomSampler(range(batch_size)),
             mini_batch_size,
             drop_last=True)
+        # obs =  self.obs[:-1].view(-1, *self.obs.size()[2:])
+        # actions = self.actions.view(-1, self.actions.size(-1))
+        # value_preds = self.value_preds[:-1].view(-1, 1)
+        # returns = self.returns[:-1].view(-1, 1)
+        # masks = self.masks[:-1].view(-1, 1)
+        # action_log_probs = self.action_log_probs.view(-1, 1)
+        # if success_samples is not None:
+        #     obs = torch.cat((obs, success_samples[0]), dim=0)
+        #     actions = torch.cat((actions, SuccessStorage[1]), dim=1)
+        #     value_preds = torch.cat((value_preds))
         for indices in sampler:
             obs_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[indices]
             actions_batch = self.actions.view(-1,
@@ -152,7 +190,27 @@ class RolloutStorage(object):
 
             yield obs_batch, output_ids_batch, actions_batch, \
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
-            
+
+    def copy_success_trajs(self, successRollout):
+        # copies successful trajectories from current storage to successRollout
+        #successRollout is a deque of dictionaires containing np arrays as values
+        status_flattened = self.flatten_envs(self.status)
+        status_flattened = [s for s in status_flattened if s is not None]
+        traj_starts, traj_ends, traj_lens = self.get_trajectory_bounds_flat()
+        for s in enumerate(status_flattened):
+            if s == 1:
+                start = traj_starts[s]
+                end = traj_ends[s]
+                successRollout.append({
+                    "obs": self.obs[:-1].view(-1, *self.obs.size()[2:])[start:end],
+                    "actions": self.actions.view(-1, self.actions.size(-1))[start:end],
+                    "output_ids": self.output_ids.view(-1, self.output_ids.size(-1))[start:end],
+                    #value_preds should be computed at each sampling time
+                    "returns": self.returns[:-1].view(-1, 1)[start:end],
+                    "masks": self.masks[:-1].view(-1, 1)[start:end],
+                })
+
+
     def get_temp_rewards(self, temp_predictor):
         tasks, actions, traj_lens, status = self.extract_trajectories()
         traj_starts, _, _ = self.get_trajectory_bounds_flat()
@@ -170,6 +228,8 @@ class RolloutStorage(object):
         bad_masks_flattened = bad_masks_flattened.permute(1, 0, 2).contiguous()
         bad_masks_flattened = bad_masks_flattened.view(-1)
         bad_masks = []
+
+        
         
         counter =0
         for i, seg_len in enumerate(traj_lens):
@@ -179,13 +239,6 @@ class RolloutStorage(object):
         
         temp_rewards = temp_predictor.compute_novelty_batch(tasks, actions, start_obs, traj_lens, random_masks, bad_masks, status)
         
-        # counter =0
-        # for task, obs, traj_len in zip(tasks, start_obs,  traj_lens):
-        #     temp_reward = temp_predictor.compute_novelty(task, actions[counter: counter + traj_len], obs).tolist()
-        #     temp_reward.append(0) #TODO check if adding 0 is correct, normally the advantage for each trajectory is len of n+1; if n then it should be removed
-
-        #     temp_rewards.extend(temp_reward)
-        #     counter += traj_len
         return temp_rewards
 
     def extract_trajectories(self):
@@ -194,15 +247,8 @@ class RolloutStorage(object):
         status_flattened = self.flatten_envs(self.status)
         
         status_flattened = [s for s in status_flattened if s is not None]
+        
         tasks_flattened = [t for t in tasks_flattened if t is not None]
-        #masks_flattened = self.masks.view(-1)
-        # done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
-        # trajectory_end = done_indices  # since ends at t
-        # T = masks_flattened.shape[0] - 1
-        # if trajectory_end.numel() == 0 or trajectory_end[-1].item() < T:
-        #     trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
-        # trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
-        # trajectory_lengths = (trajectory_end - trajectory_start).tolist()
         _, _, trajectory_lengths = self.get_trajectory_bounds_flat()
         trajectory_lengths = trajectory_lengths.tolist()
         
@@ -220,26 +266,25 @@ class RolloutStorage(object):
     
     def compute_freq_reward(self, scale=0.0096):
         # Update count
-        actions_flattened = self.flatten_envs(self.action_texts)
-        # masks_flattened = self.masks.view(-1)
-        # done_indices = (masks_flattened == 0).nonzero(as_tuple=False).squeeze(1)
-        # trajectory_end = done_indices  # since ends at t
-        # T = masks_flattened.shape[0] - 1
-        # if trajectory_end.numel() == 0 or trajectory_end[-1].item() < T:
-        #     trajectory_end = torch.cat([trajectory_end, torch.tensor([T], device=trajectory_end.device)])
-        # trajectory_start = torch.cat([torch.tensor([0], device=done_indices.device), trajectory_end[:-1]])
-        # trajectory_lengths = (trajectory_end - trajectory_start).tolist()
-        trajectory_start, trajectory_end, trajectory_lengths = self.get_trajectory_bounds_flat()
-        trajectory_lengths = trajectory_lengths.tolist()
+        tasks_flattened, actions_flattened, trajectory_lengths, status = self.extract_trajectories()
+        #actions_flattened = self.flatten_envs(self.action_texts)
+        #trajectory_start, trajectory_end, trajectory_lengths = self.get_trajectory_bounds_flat()
+        #trajectory_lengths = trajectory_lengths.tolist()
+        random_masks_flattened = self.random_mask.permute(1, 0, 2).contiguous()
+        random_masks_flattened = random_masks_flattened.view(-1)
+
         counter = 0
         freq_reward = []
-        for traj_len in trajectory_lengths:
+        
+        
+        for i, traj_len in enumerate(trajectory_lengths):
             actions_counter = {}
-            for action in actions_flattened[counter: counter + traj_len]:
+            for j, action in enumerate(actions_flattened[counter: counter + traj_len]):
                 if action not in actions_counter:
                     actions_counter[action] = 0
                 actions_counter[action] += 1
-                freq_reward.append(scale * 1 / np.sqrt(actions_counter[action]))
+                freq_reward.append((1- random_masks_flattened[counter + j]) * (1 - status[i]) * scale * 1 / np.sqrt(actions_counter[action]))
+                #TODO  #TODO consider random_mask consideration as well..
         # Return inverse square root reward
         return torch.Tensor(freq_reward)
     
@@ -290,17 +335,59 @@ class RolloutStorage(object):
             dim=1
         )
         ends = padded_reset.nonzero(as_tuple=False)
-        # Sort by process id then timestep
-        # order = torch.lexsort((starts[:, 1], starts[:, 0]))
-        # starts = starts[order]
-        # ends = ends[order]
-
-        # Compute FLATTENED indices in [num_procs * steps] space
         flat_starts = starts[:, 0] * steps + starts[:, 1]
         flat_ends = ends[:, 0] * steps + ends[:, 1]
         lengths = flat_ends - flat_starts
         lengths = lengths + 1
         
-        return flat_starts.squeeze(), flat_ends.squeeze(), lengths.squeeze()
+        return flat_starts, flat_ends, lengths
 
 
+
+"""
+class SuccessStorage(object):
+
+    # storage for success trajectories:
+    # "obs": self.obs[:-1].view(-1, *self.obs.size()[2:])[start:end],
+    # "actions": self.actions.view(-1, self.actions.size(-1))[start:end],
+    # "output_ids": self.output_ids.view(-1, self.output_ids.size(-1))[start:end],
+    # #value_preds should be computed at each sampling time
+    # "returns": self.returns[:-1].view(-1, 1)[start:end],
+    # "masks"
+
+    def __init__(self, max_size=100):
+        self.max_size = max_size
+        self.buffer = deque(maxlen= max_size)
+
+
+    def sample(self, batch_size, value_function, device='cpu'):
+
+        # Randomly samples full trajectories until the approximate number of steps reaches batch_size.
+        # Returns stacked tensors.
+
+        import random
+        trajs = random.sample(list(self.buffer), min(len(self.buffer), batch_size))
+        
+
+        obs = torch.cat([traj['obs'] for traj in self.buffer], dim=0).to(device)
+        actions = torch.cat([traj['actions'] for traj in self.buffer], dim=0).to(device)
+        output_ids = torch.cat([traj['output_ids'] for traj in self.buffer], dim=0).to(device)
+        value_preds = torch.cat([traj['value_preds'] for traj in self.buffer], dim=0).to(device)
+        returns = torch.cat([traj['returns'] for traj in self.buffer], dim=0).to(device)
+        trajs = random.sample(range(obs.shape[0]), min(obs.shape[0], batch_size))
+
+        obs_sampled = obs[trajs]
+        actions_sampled = actions[trajs]
+        output_ids_sampled = output_ids[trajs]
+        value_preds_sampled = value_preds[trajs]
+        returns_sampled = returns[trajs]
+        advantages = returns_sampled - value_preds_sampled
+        advantages = (advantages - advantages.mean()) / (
+            advantages.std() + 1e-5)
+
+        return obs_sampled, actions_sampled, output_ids_sampled, value_preds_sampled, returns_sampled, advantages
+    
+    def __len__(self):
+        return len(self.buffer)
+    
+"""

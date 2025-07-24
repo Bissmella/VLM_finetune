@@ -187,9 +187,15 @@ def get_args():
     # arguments for wandb
     parser.add_argument("--use-wandb", default=False, action='store_true')
     parser.add_argument("--wandb-project", type=str, default='test')
-    parser.add_argument("--wandb-run", type=str, default='test')
+    parser.add_argument("--wandb-run", type=str, default='test')  #wandb-group
+    parser.add_argument("--wandb-group", type=str, default='test')
     parser.add_argument("--q4", default=False, action='store_true')
     parser.add_argument("--q8", default=False, action='store_true')
+    parser.add_argument("--temp-predictor", default=False, action='store_true')
+    parser.add_argument("--act-freq-reward", default=False, action='store_true')
+    parser.add_argument("--action-sampling", default=False, action='store_true')   #sampling if tru will ask the opinion of model regarding the actions and sample from them as chosen action
+    parser.add_argument("--rlef", default=False, action='store_true') 
+
     args = parser.parse_args()
 
 

@@ -1,10 +1,11 @@
 compute_environment: LOCAL_MACHINE
 deepspeed_config:
+  deepspeed_config_file: /home/bahaduri/RL4VLM/VLM_PPO/scripts/ds_config.json
+  zero3_init_flag: false
   offload_optimizer_device: cpu
   offload_param_device: none
   zero3_init_flag: false
   zero_stage: 2
-  torch_adam: true
 distributed_type: DEEPSPEED
 downcast_bf16: 'no'
 machine_rank: 0

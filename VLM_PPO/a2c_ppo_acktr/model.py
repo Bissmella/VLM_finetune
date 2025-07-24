@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
 from a2c_ppo_acktr.utils import init
 from a2c_ppo_acktr.llava_interface import llava_evaluate, llava_generate, qwen_generate, qwen_process, qwen_evaluate
+from .rl_utils import generate_fake_response
 import torch.nn.init as init
 import torchvision.transforms as T
 
@@ -14,6 +15,8 @@ from torch.nn import CrossEntropyLoss
 from typing import List, Optional, Tuple, Union
 from collections import deque
 from transformers.modeling_outputs import ModelOutput
+
+from torch.nn.utils.rnn import pad_sequence
 
 class Flatten(nn.Module):
     def forward(self, x):
@@ -156,13 +159,13 @@ class QwenVLMValue(nn.Module):
     """
     actually the base is also used for generation!
     """
-    def __init__(self, base, processor):
+    def __init__(self, base, processor, hidden_dim=1536):
         super(QwenVLMValue, self).__init__()
         self.base = base
         self.processor = processor
         # hard-code to llama hidden size for the value head
         self.value_head = nn.Sequential(
-            nn.Linear(1536, 1024), # First layer  #the hidden states of the qwen has 1536 dims
+            nn.Linear(hidden_dim, 1024), # First layer  #the hidden states of the qwen has 1536 dims
             nn.ReLU(), # Non-linearity
             nn.Linear(1024, 512), # Second layer
             nn.ReLU(), # Non-linearity
@@ -333,21 +336,51 @@ class QwenVLMPolicy(nn.Module):
         processed_images = obs
         return self.image_processor.preprocess(processed_images, return_tensors='pt')['pixel_values'].to(dtype=self.base.dtype)
 
-    def act(self, image, deterministic=False, text=None):
+    def act(self, image, deterministic=True, text=None):
         """
         
         """
         # image_tensor = self.process_obs(inputs)
         # if INPUT_IDS is None:
         #     INPUT_IDS = self.INPUT_IDS
-        value, output_ids, text_action, action_log_prob, action_tokens_log_prob = qwen_generate(value_model = self.value_model,
-                                                    processor = self.processor,
-                                                    text = text,
-                                                    image=image,
-                                                    args = self.args)
-        action, random_mask, command = self.projection_f(text_action)
+        #only outputs, input coming from generate  outputs is [text], output_ids as well probably
+        # fake_response = response_func( outputs, command)
+        if self.args.action_sampling:
+            text_action, input, output_ids = qwen_generate(value_model = self.value_model,
+                                                        processor = self.processor,
+                                                        text = text,
+                                                        image=image,
+                                                        args = self.args)
+            action, random_mask, command = self.projection_f(text_action, action_sampling = self.args.action_sampling)
+            
+            fake_response = generate_fake_response( text_action, command)
+            
+            f_response_encoded = self.processor.tokenizer(fake_response, padding=True, return_tensors="pt")["input_ids"]
+            
+            padded_output_ids_trimmed = pad_sequence(f_response_encoded, batch_first=True, padding_value=0)
+            padded_output_ids = torch.full((output_ids.size(0), 2*self.args.max_new_tokens), 151643, dtype=output_ids.dtype, device = output_ids.device) #151643 is pad token in qwen2vl #TODO hardcoded
+            padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
+            with torch.no_grad():
+                values, sum_log_probs, action_tokens_log_prob = qwen_evaluate(self.value_model, padded_output_ids, self.args.temperature, self.args.thought_prob_coef, self.processor, text=self.INPUT_IDS, image=image  )
+            return values, padded_output_ids, action, random_mask, command, sum_log_probs, action_tokens_log_prob
+        #create fake output_ids  based on action and env_name and tokenizing it
+        #create INPUT_IDS  specific for action_log_prob calculation
+        # call evaluate_actions  to get log_prob
+        #qwen_generate already is calling qwen_evaluate so just bring it here 
+
+        ## very original one here
+        else:
+            value, output_ids, text_action, action_log_prob, action_tokens_log_prob = qwen_generate(value_model = self.value_model,
+                                                        processor = self.processor,
+                                                        text = text,
+                                                        image=image,
+                                                        args = self.args)
+            action, random_mask, command = self.projection_f(text_action, action_sampling = self.args.action_sampling)
+            
+            
+            return value, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob
         
-        return value, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob
+
 
     def get_value(self, image, text=None):
         if text is None:

@@ -17,7 +17,9 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES="0" TORCH_SHOW_CPP_STACKTRACES
     --model-path "Qwen/Qwen2-VL-2B-Instruct" \
     --use-lora \
     --train-vision all \
-    --save-dir "" \
+    --save-dir ""  \
+    --temp-predictor \
+    --act-freq-reward
     # --wandb-project you_wandb_proj \
     # --wandb-run you_wandb_run \
     # --use-wandb \

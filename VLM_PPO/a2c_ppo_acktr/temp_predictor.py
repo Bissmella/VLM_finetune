@@ -53,8 +53,10 @@ class TrajectoryDatasetList(Dataset):
         self.status = status
 
     def __getitem__(self, idx):
-        return self.encodings[idx] , self.rnd_masks[idx], self.bad_masks[idx], self.status[idx]  # simply return the dict at index `idx`
-
+        try:
+            return self.encodings[idx] , self.rnd_masks[idx], self.bad_masks[idx], self.status[idx]  # simply return the dict at index `idx`
+        except:
+            breakpoint()
     def __len__(self):
         return len(self.encodings)
 
@@ -130,6 +132,7 @@ class Temp_predictor():
         self.trajs_buffer = deque(maxlen=buff_size)
         self.trajs_rndMask_buffer = deque(maxlen=buff_size)
         self.trajs_badMask_buffer = deque(maxlen=buff_size)
+        self.status_buffer = deque(maxlen=buff_size)
         self.spec_gen_token = "%generate%"
         # for name, param in self.model.named_parameters():
         #     if hasattr(param, 'ds_id'):
@@ -177,6 +180,8 @@ class Temp_predictor():
             self.trajs_buffer.append(traj)
             self.trajs_rndMask_buffer.append(random_masks[i])
             self.trajs_badMask_buffer.append(bad_masks[i])
+            self.status_buffer.append(status[i])
+            
             
         return trajs##input_seq, target_seq, obs_seq
     
@@ -218,7 +223,7 @@ class Temp_predictor():
             image_tokens = [151652, 151653, 151655]  # Specific image token IDs for Qwen2VLProcessor
         else:
             image_tokens = [self.processor.tokenizer.convert_tokens_to_ids(self.processor.image_token)]  # Convert image token to ID
-        labels, batch_slices = self.assign_random_mask_weights(labels, random_masks, bad_masks)
+        labels, batch_slices, random_coeffs = self.assign_random_mask_weights(labels, random_masks, bad_masks)
         pattern = torch.tensor([1018, 19366, 4], device=labels.device)   #that is fixed token id of a special token  " %generate% "
         match = (labels.unfold(1, len(pattern), 1) == pattern).all(-1)
         first_match = torch.where(match.any(1), match.float().argmax(1), torch.full((labels.size(0),), labels.size(1), device=labels.device))
@@ -235,7 +240,7 @@ class Temp_predictor():
         batch['attention_mask'] = batch['attention_mask'].to(self.device)
         batch['pixel_values'] = batch['pixel_values'].to(self.device)
         batch['image_grid_thw'] = batch['image_grid_thw'].to(self.device)
-        return batch, batch_slices, status
+        return batch, batch_slices, random_coeffs, status
     
     def preprocess_data(self, examples):
         model_inputs = self.tokenizer(examples["input"], truncation=True, padding=False)
@@ -318,10 +323,11 @@ class Temp_predictor():
         random_masks = self.trajs_rndMask_buffer
         bad_masks = self.trajs_badMask_buffer
         trajs = [format_data_sft(traj) for traj in trajs]
+        status = self.status_buffer
         
-        trajs_dataset = TrajectoryDatasetList(trajs, random_masks, bad_masks)
+        trajs_dataset = TrajectoryDatasetList(trajs, random_masks, bad_masks, status)
 
-        train_loader = DataLoader(trajs_dataset, batch_size=8, collate_fn=self.collate_fn, shuffle=True)
+        train_loader = DataLoader(trajs_dataset, batch_size=4, collate_fn=self.collate_fn, shuffle=True)
         train_loader = self.accelerator.prepare(train_loader)
         info = {}
         info_list = []
@@ -333,7 +339,7 @@ class Temp_predictor():
             epoch_loss= 0
             correct = 0
             total = 0
-            for batch, _, _ in train_loader:
+            for batch, _, _, _ in train_loader:
                 
                 labels = batch['labels']
                 outputs = self.model(inputs = batch,
@@ -512,27 +518,25 @@ class Temp_predictor():
         data_loader = DataLoader(trajs_dataset, batch_size=8, collate_fn=self.collate_fn, shuffle=False)
         losses = []
         with torch.no_grad():
-            for batch, batch_slices, status in data_loader:
+            for batch, batch_slices, random_coeffs, status in data_loader:
                     input_ids = batch['input_ids'].to(self.device)
                     input_attention_mask = batch['attention_mask'].to(self.device)
                     labels = batch['labels'].to(self.device)
-                    #loss_weights = batch['weights'].to(self.device) #TODO to be done
-                    #labels_attention_mask = label['attention_mask'].to(self.device)
+
 
                     outputs = self.model(inputs = batch,
-                                        #output_hidden_states = True,
-                                        # decoder_input_ids=labels_input_ids,
-                                        # decoder_attention_mask=labels_attention_mask,
-                                        #TODO loss_weights
+                                        
                                         )
                     loss = outputs[0].loss.view(batch['input_ids'].shape)
                     
+                    #batch_slices are slices of proper actions and random ones.
                     action_slices = [
                                 [slice(start, end) for start, end in zip(s[:, 0].tolist(), s[:, 1].tolist())]
                                 if s is not None else None
                                 for s in batch_slices
                             ]
 
+                    #loss sliced to each proper action
                     loss_sliced = [
                         [loss_raw[s] for s in slices] if slices is not None
                         else [loss_raw.new_tensor(0)]  # better device/dtype safety
@@ -545,7 +549,9 @@ class Temp_predictor():
                     ]
                     
                     #setting the loss for succcessful trajs to 0
-                    status = 1- status  #converting status -->  1: failed,  0: success
+                    
+                    action_loss_aggregated = [loss * random_coeff.to(loss.device) for loss, random_coeff in zip(action_loss_aggregated, random_coeffs)]
+                    status = 1- status  #converting status -->  1: failed,  0: success in order to target only failed trajectories
                     action_loss_final = [loss * stat for loss, stat in zip(action_loss_aggregated, status)]
                     losses.extend(action_loss_final)
                     # #seperators = [[slice[0, 0].item() + slice[:, 1].tolist()] for slice in batch_slices]
@@ -566,36 +572,40 @@ class Temp_predictor():
         random_masks: list or tensor of shape (len(texts), len(actions sequence))
         """
         pattern = torch.tensor([1018, 19366, 4], device=labels.device)   #that is fixed token id of a special token  " %generate% "
-        match = (labels.unfold(1, len(pattern), 1) == pattern).all(-1)
+        matched = (labels.unfold(1, len(pattern), 1) == pattern).all(-1)
         #first_match = torch.where(match.any(1), match.float().argmax(1), torch.full((labels.size(0),), labels.size(1), device=labels.device))
-        first_match = torch.where(match.any(1), match.float().argmax(1), torch.full((labels.size(0),), -len(pattern), device=labels.device))
+        first_match = torch.where(matched.any(1), matched.float().argmax(1), torch.full((labels.size(0),), -len(pattern), device=labels.device))
         first_match += 2
         
-        seperator_mask = (labels == self.act_sep_token_id[0])
+        seperator_mask = (labels == self.act_sep_token_id[0])   #finding where in the labels are action seperators " ||"
         try:
-            indices_per_row = [row.nonzero(as_tuple=True)[0] for row in seperator_mask]
+            indices_per_row = [row.nonzero(as_tuple=True)[0] for row in seperator_mask]  # indices where the action seperators exists
         except:
             breakpoint()
         batch_slices = []
+        random_coeffs = []
         
         for indices, first, label, random_mask, bad_mask in zip (indices_per_row, first_match, labels, random_masks, bad_masks):
-            indices_mask = (indices > first)
-            indices = indices[indices_mask]
+            indices_mask = (indices > first)  #the actual action seperators is after the first (%generate% token)
+            indices = indices[indices_mask]   #subetting based on above flag
+            
             len_label = torch.Tensor([len(label)], device=label.device).int() # dtype=torch.long,
             first = first.unsqueeze(0)
-            indices = torch.cat((first, indices, len_label), dim=0)
+            indices = torch.cat((first, indices, len_label), dim=0)    #first is the start, then intermidary indices and the final which is length of labels
             
-            slices = indices.unfold(0, 2, 1)
+            slices = indices.unfold(0, 2, 1)  #turning indices to slices
             
             # random_mask = random_mask.unsqueeze(1)
             # random_mask = random_mask.expand(slices.shape)
-            mask = random_mask == 1
+            mask = random_mask == 1    #mask for random actions to not be considered into calculation
             slices_copy = slices.clone()
-            slices = slices[mask]
-            inverse_slices = slices_copy[~mask]
+            slices = slices[mask]       #random actions
+            random_coeff = torch.ones(slices_copy.shape[0], device = label.device)  #randomness coefficents, ones means proper actions
+            random_coeff[mask] = 0   #setting coefficient for random actions to 0 
+            inverse_slices = slices_copy   #actions taken by both policy and random
 
-            inverse_slices[:, 0] += 1
-            slices[:, 0] += 1
+            inverse_slices[:, 0] += 1     # excluding the end of pattern and those action seperators
+            slices[:, 0] += 1            # excluding the end of pattern and those action seperators
             
             if inverse_slices.numel() > 0:
                 #inverse_slices = torch.cat([torch.arange(*slicee) for slicee in inverse_slices])
@@ -604,14 +614,15 @@ class Temp_predictor():
                 inverse_slices =None
             #slices[:, 0] +=1
             if slices.numel() > 0:
-                slices = torch.cat([torch.arange(*slicee) for slicee in slices])
+                slices = torch.cat([torch.arange(*slicee) for slicee in slices])   #creating indices for subsetting the labels, by filling inside of the slices
                 slices = slices.int()
                 label[slices] = -100
             if bad_mask == 0:
-                if label[-2:] == torch.tensor([151645, 198], device=labels.device).all():
+                if label[-2:] == torch.tensor([151645, 198], device=labels.device).all():    #ending actions is not valid..
                     labels[-2:] = -100
             batch_slices.append(inverse_slices)
-        return labels, batch_slices
+            random_coeffs.append(random_coeff.to(labels.device))
+        return labels, batch_slices, random_coeffs
 
         # for text, token_ids, random_mask in zip(texts, token_ids_list, random_masks):
         #     tokens_random_mask = []

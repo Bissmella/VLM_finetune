@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from collections import OrderedDict
 torch.backends.cuda.enable_mem_efficient_sdp(False)  #disabling cutlass not working on small gpus
 torch.backends.cuda.enable_flash_sdp(False)
 
@@ -84,6 +85,26 @@ def cosine_schedule(step, T_max, eta_min, base_lr):
     cosine_decay = 0.5 * (1 + math.cos(math.pi * step / T_max))
     return (eta_min + (base_lr - eta_min) * cosine_decay) / base_lr
 
+def reset_history():
+    return {
+        "ep_len": [],
+        "ep_ret": [],
+        #"goal": [],
+        "loss": [],
+        "policy_loss": [],
+        "value_loss": [],
+        # "possible_actions": [],
+        # "actions": [],
+        # "prompts": [],
+        "entropy": [],
+    }
+
+def get_trainable_params( model, return_with_names=False):
+        if return_with_names:
+            return filter(lambda p: p[1].requires_grad, model.named_parameters())
+        else:
+            return filter(lambda p: p.requires_grad, model.parameters())
+
 def main():
     args = get_args()
 
@@ -97,7 +118,6 @@ def main():
     torch.set_num_threads(1)
 
     accelerator = accelerate.Accelerator(gradient_accumulation_steps=args.grad_accum_steps)#, mixed_precision="fp16")
-    second_accelerator = accelerate.Accelerator()
     device = accelerator.device
     ## environment interaction device is cpu
     model_device = device
@@ -163,7 +183,8 @@ def main():
         )
     if args.use_lora:
         base = get_peft_model(base, base_lora_config, adapter_name="policy")
-        base.add_adapter(adapter_name="adversery", peft_config=base_lora_config)
+        if args.temp_predictor:
+            base.add_adapter(adapter_name="adversery", peft_config=base_lora_config)
         base.set_adapter("policy")
     value_model = QwenVLMValue(base, processor)
     value_model = value_model.to(model_device)
@@ -243,10 +264,12 @@ def main():
     # actor_critic.base.set_adapter('policy')
     # actor_critic.value_model.base.set_adapter('policy')
     actor_critic, optimizer, lr_scheduler = accelerator.prepare(actor_critic, optimizer, lr_scheduler)#, temporal_predictor_model)
-    if True:
+    if args.temp_predictor:
         temporal_predictor = Temp_predictor(actor_critic.value_model, processor, optimizer, accelerator)
-    actor_critic.base.set_adapter('policy')
-    actor_critic.value_model.base.set_adapter('policy')
+    else:
+        temporal_predictor = None
+    # actor_critic.base.set_adapter('policy')
+    # actor_critic.value_model.base.set_adapter('policy')
     agent = algo.PPO(
             actor_critic,
             optimizer,
@@ -260,7 +283,7 @@ def main():
             save_dir=args.save_dir)
 
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
-                              envs.observation_space.shape, envs.action_space, args.max_new_tokens, temporal_predictor)
+                              envs.observation_space.shape, envs.action_space, args.max_new_tokens, temporal_predictor, args.act_freq_reward, scale=0.006)
     
     image_tensor = obs.squeeze(0).permute(2,0,1).float()
     if image_tensor.max().item() <= 1.0:
@@ -285,11 +308,12 @@ def main():
     if args.use_wandb:
         import wandb
         run_name = args.wandb_run + "-" + args.env_name
-        wandb.init(project=args.wandb_project, name=run_name, group=run_name, config=args)
+        wandb.init(project=args.wandb_project, name=run_name, group=args.wandb_group, job_type=str(args.seed), config=args)  #add group="", job_type="seed or whatever"
 
     print(qs)
     running_episode_rewards = torch.zeros(args.num_processes).flatten()
 
+    history = reset_history()
     num_explore = int(args.explore_portion*num_updates)
     prev_infos = []
     infos = []
@@ -339,6 +363,8 @@ def main():
                     n_start = True
                 else:
                     n_start = False
+                    if step == args.num_steps -1:
+                        status[i] = 0
                 
             # bad_mask is a legacy implementation of the storage.py file
             bad_masks = torch.FloatTensor(
@@ -346,7 +372,7 @@ def main():
             rollouts.insert_task(tasks, command, status)
             rollouts.insert(obs, output_id, action,
                             action_log_prob, value, reward, masks, bad_masks, random_mask)
-            print("step: ", step)
+            #print("step: ", step)
         print("****** iteration number:{} ******".format(j))
         print("prompt:{}".format(prompt))
         print("text_action:{}".format(text_action))
@@ -363,13 +389,37 @@ def main():
             next_value = actor_critic.get_value(
                 image).detach()
 
+        if  args.temp_predictor and j >0:
+            tmp_info = temporal_predictor.update_mm_model()
+        else:
+            tmp_info = {"temp_predictor.loss": 0, "temp_predictor.acc": 0}
         rollouts.compute_returns(next_value, args.use_gae, args.gamma,
-                                 args.gae_lambda, args.use_proper_time_limits)
+                                 args.gae_lambda, args.use_proper_time_limits, j)
         value_loss, action_loss, dist_entropy = agent.update(rollouts, update_num=j)
         lr_scheduler.step()
-        tmp_info = temporal_predictor.update_mm_model()
-        breakpoint()
+        
+        
         rollouts.after_update()
+
+        #saving model and optimizer:
+        """
+        if j % args.save_period == 0:
+            print("Saving model ...")
+            model_state_dict = OrderedDict(
+                {k: v for k, v in get_trainable_params(value_model, True)}
+            )
+            torch.save(model_state_dict, args.output_dir + f"/model_{j}.checkpoint")
+            torch.save(
+                optimizer.state_dict(), args.outupt_dir + f"/optimizer_{j}.checkpoint"
+            )
+        model_state_dict = OrderedDict(
+                {k: v for k, v in get_trainable_params(value_model, True)}
+            )
+        torch.save(model_state_dict, args.output_dir + "/model_last.checkpoint")
+        torch.save(
+                optimizer.state_dict(), args.outupt_dir + "/optimizer_last.checkpoint"
+            )
+        """
         if len(episode_rewards) > 1:
             total_num_steps = (j + 1) * args.num_processes * args.num_steps
             end = time.time()
@@ -400,6 +450,9 @@ def main():
                         "reward.mean": rollouts.rewards.mean().item(),
                         "reward.std": rollouts.rewards.std().item(),
                         "reward.median": rollouts.rewards.median().item(),
+                        "temp_rewards.max": rollouts.temp_rewards.max().item(),
+                        "temp_rewards.min": rollouts.temp_rewards.min().item(),
+                        "temp_rewards.mean": rollouts.temp_rewards.mean().item(),
                         "return.max": rollouts.returns.max().item(),
                         "return.min": rollouts.returns.min().item(),
                         "return.mean": rollouts.returns.mean().item(),
@@ -407,7 +460,8 @@ def main():
                         "value.max": rollouts.value_preds.max().item(),
                         "value.min": rollouts.value_preds.min().item(),
                         "value.mean": rollouts.value_preds.mean().item(),
-                        "value.std": rollouts.value_preds.std().item(),})
+                        "value.std": rollouts.value_preds.std().item(),
+                        **tmp_info})
 
 if __name__ == "__main__":
     main()

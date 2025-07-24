@@ -1,7 +1,8 @@
 import os
 
 # import gym
-from minigrid.wrappers import ImgObsWrapper
+#from minigrid.wrappers import ImgObsWrapper, RGBImgObsWrapper
+from gym import spaces
 import gymnasium as gym
 import numpy as np
 import torch
@@ -29,6 +30,52 @@ except ImportError:
     pass
 
 
+class RGBImgObsWrapper(gym.core.ObservationWrapper):
+    """
+    Wrapper to use fully observable RGB image as the only observation output,
+    no language/mission. This can be used to have the agent to solve the
+    gridworld in pixel space.
+    """
+
+    def __init__(self, env, tile_size=32):
+        super().__init__(env)
+
+        self.tile_size = tile_size
+        self.observation_space = spaces.Box(
+            low=0,
+            high=255,
+            shape=(self.env.width*tile_size, self.env.height*tile_size, 3),
+            dtype='uint8'
+        )
+        #env.observation_space.spaces['image']
+        
+        # self.observation_space.spaces['image'] = spaces.Box(
+        #     low=0,
+        #     high=255,
+        #     shape=(self.env.width*tile_size, self.env.height*tile_size, 3),
+        #     dtype='uint8'
+        # )
+
+    def observation(self, obs):
+        env = self.unwrapped
+
+        rgb_img = env.render(
+            #mode='rgb_array',
+            #highlight=False,
+            #tile_size=self.tile_size
+        )
+
+        return rgb_img
+        # return {
+        #     'mission': obs['mission'],
+        #     'image': rgb_img
+        # }
+
+
+
+
+
+
 def make_env(env_id, seed, rank, log_dir, allow_early_resets, use_cnn=False):
     def _thunk():
         if env_id.startswith("dm"):
@@ -36,8 +83,10 @@ def make_env(env_id, seed, rank, log_dir, allow_early_resets, use_cnn=False):
             env = dmc2gym.make(domain_name=domain, task_name=task)
             env = ClipAction(env)
         elif "MiniGrid" in env_id:
-            env = gym.make(env_id, render_mode="rgb_array")
-            env = ImgObsWrapper(env)
+            env = gym.make(env_id, tile_size = 32, render_mode="rgb_array")
+            env = RGBImgObsWrapper(env) #ImgObsWrapper(env)
+            if "DoorKey" in env_id:
+                env.max_steps = 100
         else:
             env = gym.make(env_id)
         
