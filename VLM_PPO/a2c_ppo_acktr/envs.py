@@ -82,11 +82,18 @@ def make_env(env_id, seed, rank, log_dir, allow_early_resets, use_cnn=False):
             _, domain, task = env_id.split('.')
             env = dmc2gym.make(domain_name=domain, task_name=task)
             env = ClipAction(env)
-        elif "MiniGrid" in env_id:
-            env = gym.make(env_id, tile_size = 32, render_mode="rgb_array")
+        elif "MiniGrid-DoorKey" in env_id:
+            env = gym.make(env_id, tile_size = 32, render_mode="rgb_array", max_steps = 250)
+            
             env = RGBImgObsWrapper(env) #ImgObsWrapper(env)
+            
             if "DoorKey" in env_id:
-                env.max_steps = 100
+                env.max_steps = 250
+        elif "MiniGrid-Empty" in env_id:
+            env = gym.make(env_id, tile_size = 32, render_mode="rgb_array")
+            
+            env = RGBImgObsWrapper(env) #ImgObsWrapper(env)
+            
         else:
             env = gym.make(env_id)
         

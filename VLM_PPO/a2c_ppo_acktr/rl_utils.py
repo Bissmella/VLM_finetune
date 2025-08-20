@@ -82,13 +82,13 @@ def get_prompt(env_name, action_only,sampling = False, infos = None):
         qs = qs + "\"action\": \"{your choosen action}\" \n}"
     elif "MiniGrid-DoorKey" in env_name:
         if sampling:
-            qs = "You are an expert 2D game player in a grid-based environment. The environment has a key that to pick up in order to unlock a door represented as blue square with a minus, and then reach the green goal square. "
-            qs += "You are observing the image of the current state, and your goal is to get the player to the green goal square. The player is shown by a blue arrow."
-            #qs += "At each step, you can choose one of these actions: ['Turn left', 'Turn right', 'Move forward', 'Pick up', 'Toggle'].\n"
+            qs = "You are an expert 2D game player in a grid-based environment. "
+            qs += "You are observing the image of the current state, and your goal is to get the player to the pink goal square/tile. "
+            qs += "The player is shown by cyan triangle.The tip (pointy end) of the triangle is the direction the player is facing, the flat side is the back. In the game the player must pick up a key to unlock the door. The square with a minus (-) and blue or yellow color is the closed door. The player shuold reach the pink goal tile to win. "
+            qs += "At each step the possible actions are: ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key was in front of it in first image, 'Toggle': toggle door only if door was infront of it in first image]. "
             qs += "Please evaluate each action based on the current observation and assign a score between 1 (very bad) and 5 (very good), reflecting how useful or promising each action is in reaching the goal. Use only the available information and image.\n"
             qs += "Return your answer as a valid JSON object in the following format:\n{\n"
-            qs += '  "thoughts": "Describe the current scene step-by-step. First, summarize the visible area concisely. Then, specify the exact position and facing direction of the player (marked by an arrow). List nearby objects, or interactive elements with their relative locations. Do no mention what action to take yet.",\n' #Briefly describe only the current scene, position and direction of the agent shown by an arrow, and other objects by describing the current image.
-            #qs = qs + "\"top_action_analysis\": \"Based on the above scene, what will be the consequences of each action."
+            qs += '  "thoughts": "Describe briefly the current state of the agent as seen in the image.",\n' #Briefly describe only the current scene, position and direction of the agent shown by an arrow, and other objects by describing the current image.
             qs += '  "action_scores": {\n'
             qs += '    "Turn left": score_1,\n'
             qs += '    "Turn right": score_2,\n'
@@ -96,16 +96,57 @@ def get_prompt(env_name, action_only,sampling = False, infos = None):
             qs += '    "Pick up": score_4,\n'
             qs += '    "Toggle": score_5\n'
             qs += "  }\n"
-            qs += "}"
+
+            # qs += '  "action_scores": {\n'
+            # qs += '    "Turn left": {\n      "score": score_1,\n      "thoughts_1": "Describe briefly the current scene in favor of this action"\n    },\n'
+            # qs += '    "Turn right": {\n      "score": score_2,\n      "thoughts_2": "Describe briefly the current scene in favor of this action"\n    },\n'
+            # qs += '    "Move forward": {\n      "score": score_3,\n      "thoughts_3": "Describe briefly the current scene in favor of this action"\n    },\n'
+            # qs += '    "Pick up": {\n      "score": score_4,\n      "thoughts_4": "Describe briefly the current scene in favor of this action"\n    },\n'
+            # qs += '    "Toggle": {\n      "score": score_5,\n      "thoughts_5": "Describe briefly the current scene in favor of this action"\n    }\n'
+            #qs += '  }\n'
+            qs += '}'
         else:
-            qs = "You are an expert 2D game player in a grid-based environment. The environment has a key that to pick up in order to unlock a door represented as blue square with a minus, and then reach the green goal square. "
-            #qs = "Rules: you may need to pick up a key to open a locked door, you can only interact with adjacent tiles in the direction you are facing, you can only pass through open doors."
-            qs += "You are observing the image of the current state, and your goal is to get the player to a green goal tile. The player is shown by a blue triangle."
-            
-            qs = qs + "At each step you can choose one of these actions ['Turn left', 'Turn right', 'Move forward', 'Pick up', 'Toggle']"
+            qs = "You are an expert 2D game player in a grid-based environment. "
+            qs += "You are observing the image of the current state, and your goal is to get the player to the pink goal square/tile. "
+            qs += "The player is shown by cyan triangle.The tip (pointy end) of the triangle is the direction the player is facing, the flat side is the back. In the game the player must pick up a key to unlock the door. The square with a minus (-) and blue or yellow color is the closed door. The player shuold reach the pink goal tile to win. "
+            qs += "At each step the possible actions are: ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key was in front of it in first image, 'Toggle': toggle door only if door was infront of it in first image]. "
             qs = qs + "Your response should be a valid json object in the following format: \{\n"
             #qs = qs + "\"action\": \"your choosen action\" "
-            qs = qs + "\"thoughts\": \"Describe the current scene step-by-step. First, summarize the visible area concisely. Then, specify the exact position and facing direction of the player (marked by an arrow). List nearby objects, or interactive elements with their relative locations.\", \n"
+            #qs = qs + "\"thoughts\": \"Describe the current scene and state of the agent as seen in the image.\", \n"  ##Describe the current scene step-by-step and explain the visible area, position and facing direction of the player, nearby objects, or interactive elements with their relative locations.
+            #qs = qs + "\n}"
+            #qs = qs + "\"top_action_analysis\": \"Based on the above scene, list some plausible next actions the player might take, along with reasoning for each. Do not choose one yet."
+            qs = qs + "\"action\": \"your choosen action\" \n}"
+    elif "MiniGrid-Empty" in env_name:
+        if sampling:
+            qs = "You are an expert 2D game player in a grid-based environment. The environment is an 2d grid empty room, and the goal of the agent is to reach the pink goal square. "
+            qs += "You are observing the image of the current state, and your goal is to get the player to the pink goal square. The player is shown by triangle."
+            #qs += "At each step, you can choose one of these actions: ['Turn left', 'Turn right', 'Move forward', 'Pick up', 'Toggle'].\n"
+            qs += "Please evaluate each action based on the current observation and assign a score between 1 (very bad) and 5 (very good), reflecting how useful or promising each action is in reaching the goal. Use only the image and available information.\n"
+            qs += "Return your answer as a valid JSON object in the following format:\n{\n"
+            qs += '  "thoughts": "Describe briefly the current state of the player as seen in the image.",\n' #Briefly describe only the current scene, position and direction of the agent shown by an arrow, and other objects by describing the current image.
+            qs += '  "action_scores": {\n'
+            qs += '    "Turn left": score_1,\n'
+            qs += '    "Turn right": score_2,\n'
+            qs += '    "Move forward": score_3,\n'
+            qs += "  }\n"
+
+            # qs += '  "action_scores": {\n'
+            # qs += '    "Turn left": {\n      "score": score_1,\n      "thoughts_1": "Describe briefly the current scene in favor of this action"\n    },\n'
+            # qs += '    "Turn right": {\n      "score": score_2,\n      "thoughts_2": "Describe briefly the current scene in favor of this action"\n    },\n'
+            # qs += '    "Move forward": {\n      "score": score_3,\n      "thoughts_3": "Describe briefly the current scene in favor of this action"\n    },\n'
+            # qs += '    "Pick up": {\n      "score": score_4,\n      "thoughts_4": "Describe briefly the current scene in favor of this action"\n    },\n'
+            # qs += '    "Toggle": {\n      "score": score_5,\n      "thoughts_5": "Describe briefly the current scene in favor of this action"\n    }\n'
+            #qs += '  }\n'
+            qs += '}'
+        else:
+            qs = "You are an expert 2D game player in a grid-based environment. The environment is an 2d grid empty room, and the goal of the agent is to reach the pink goal square. "
+            #qs = "Rules: you may need to pick up a key to open a locked door, you can only interact with adjacent tiles in the direction you are facing, you can only pass through open doors."
+            qs += "You are observing the image of the current state, and your goal is to get the player to the pink goal square. The player is shown by triangle."
+            
+            qs = qs + "At each step you can choose one of these actions ['Turn left', 'Turn right', 'Move forward']"
+            qs = qs + "Your response should be a valid json object in the following format: \{\n"
+            #qs = qs + "\"action\": \"your choosen action\" "
+            qs = qs + "\"thoughts\": \"Describe the current scene and state of the player as seen in the image.\", \n"  ##Describe the current scene step-by-step and explain the visible area, position and facing direction of the player, nearby objects, or interactive elements with their relative locations.
             #qs = qs + "\n}"
             #qs = qs + "\"top_action_analysis\": \"Based on the above scene, list some plausible next actions the player might take, along with reasoning for each. Do not choose one yet."
             qs = qs + "\"action\": \"your choosen action\" \n}"
@@ -131,6 +172,8 @@ def text_projection(text_actions: List[str], env_name):
         action_list = ["Turn left", "Turn right", "Move forward", "Unused", "Unused", "Toggle"]
     elif "MiniGrid-DoorKey" in env_name:
         action_list = ["Turn left", "Turn right", "Move forward", "Pick up", "Unused",  "Toggle", "Unused"]
+    elif "MiniGrid-Empty" in env_name:
+        action_list = ["Turn left", "Turn right", "Move forward"]
     else:
         raise NotImplementedError("Action list not implemented for this env!")
     action_to_id ={}
@@ -205,7 +248,9 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
         elif "MiniGrid-MultiRoom" in env_name:
             action_list = ["Turn left", "Turn right", "Move forward", "Unused", "Unused", "Toggle"]
         elif "MiniGrid-DoorKey" in env_name:
-            action_list = ["Turn left", "Turn right", "Move forward", "Pick up", "Unused1",  "Toggle", "Unused2"]
+            action_list = ["Turn left", "Turn right", "Move forward", "Pick up", "Unused",  "Toggle", "Unused"]
+        elif "MiniGrid-Empty" in env_name:
+            action_list = ["Turn left", "Turn right", "Move forward"]
         else:
             raise NotImplementedError("Action list not implemented for this env!")
         action_to_id ={}
@@ -218,6 +263,11 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
         for string in text_actions:
             try:
                 string = string.lower()
+                match = re.search(r"```(?:json)?\n(.*?)\n```", string, re.DOTALL)
+                if match:
+                    string = match.group(1)
+                else:
+                    string = string.strip()
                 response_json = json.loads(string)
                 action_scores = response_json["action_scores"]
                 
@@ -242,6 +292,7 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
                 output_indices.append(sampled_index)
                 commands.append(chosen_action)
                 random_mask.append(1)
+                print("taken random action !!")
                 # print("JSON parse error:", e)
         
         return torch.Tensor([output_indices]).long().reshape(-1, 1), torch.Tensor([random_mask]).long().reshape(-1, 1), commands
@@ -271,11 +322,20 @@ def generate_fake_response(outputs: List[str], commands: List[str], env_name: st
                 output_trimmed = output.strip()
             #output_trimmed = output_trimmed.replace('"scene_description":', '"thoughts":')
             # Create a properly formatted JSON-style string
-            fake_response = (
-                f'{output_trimmed} \n "action": "{command}"\n' + "}"
-            )
+            # \{\n
+            # fake_response = (
+            #     f'{output_trimmed} \n "action": "{command}"\n' + "}"
+            # )
+            # fake_response = (
+            #     f'{{\n  "action": "{command}"\n}}'
+            # )
+            fake_response = f'```json\n{{\n  "action": "{command}"\n}}\n```'
+
             new_outputs.append(fake_response)
         except Exception as e:
             print(f"[Warning] Failed to process output: {e}")
-            new_outputs.append(output)
+            act_list = ["Turn left", "Turn right", "Move forward", "Pick up", "Toggle"]
+            command = random.choice(act_list)
+            fake_response = f'```json\n{{\n  "action": "{command}"\n}}\n```'
+            new_outputs.append(fake_response)
     return new_outputs

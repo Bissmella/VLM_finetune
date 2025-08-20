@@ -1,0 +1,20 @@
+compute_environment: LOCAL_MACHINE
+distributed_type: DEEPSPEED
+num_processes: 4          # ← one per GPU (you have 3x24GB)
+num_machines: 1
+machine_rank: 0
+
+mixed_precision: fp16
+downcast_bf16: "no"
+use_cpu: false
+same_network: true
+main_training_function: main
+rdzv_backend: static
+
+deepspeed_config:
+  zero_stage: 3
+  zero3_init_flag: true      # ← important: initialize partitioned
+  offload_param_device: cpu  # ← keep param shards in CPU when needed
+  offload_optimizer_device: cpu
+  torch_adam: true
+  gradient_accumulation_steps: 1

@@ -8,7 +8,7 @@ TEMP_PREDICTOR_FLAG=$5                          #"--temp-predictor"             
 ACT_FREQ_REWARD_FLAG=$6                              #"--act-freq-reward"     #""
 GROUP=$7                                               #"vlm-tmp-cur"
 ALGO_FLAG=$8
-USE_WANDB_FLAG="--use-wandb"   #--use-wandb"            #""              #  #MiniGrid-Empty-Random-6x6-v0   #MiniGrid-DoorKey-6x6-v0
+USE_WANDB_FLAG=""   #--use-wandb"            #""              #  #MiniGrid-Empty-Random-6x6-v0   #MiniGrid-DoorKey-6x6-v0
 
 
 if [ ! -d "$SAVE_DIR" ]; then
@@ -16,13 +16,13 @@ if [ ! -d "$SAVE_DIR" ]; then
     echo "Created directory: $SAVE_DIR"
 fi
 
-TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero2.yaml --main_process_port $PORT ../main_minigrid.py \
+TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero2.yaml --main_process_port $PORT ../test_vlm_val.py \
     --env-name MiniGrid-DoorKey-6x6-v0 \
     --init-lr 1e-5 \
     --end-lr 1e-9 \
     --lr_max_steps 25 \
-    --eval-num-per-episode 6 \
-    --num-env-steps 20000 \
+    --eval-num-per-episode 12 \
+    --num-env-steps 15000 \
     --num-steps 512 \
     --grad-accum-steps 64 \
     --max-new-tokens 256 \
@@ -36,7 +36,7 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --n
     --use-lora \
     --train-vision all \
     --save-dir "$SAVE_DIR" \
-    --action-sampling  \
+    --action-sampling \
     $ALGO_FLAG \
     $ACT_FREQ_REWARD_FLAG \
     $TEMP_PREDICTOR_FLAG \

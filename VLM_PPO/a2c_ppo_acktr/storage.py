@@ -5,16 +5,28 @@ import numpy as np
 def _flatten_helper(T, N, _tensor):
     return _tensor.view(T * N, *_tensor.size()[2:])
 
+from torch.utils.data import Sampler
+
+class SubsetSampler(Sampler):
+    def __init__(self, indices):
+        self.indices = indices
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __len__(self):
+        return len(self.indices)
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens, temporal_predictor=None, act_freq_reward=False, scale = 0.006):
+    def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens, temporal_predictor=None, act_freq_reward=False, scale = 0.006, grpo=False, utility_function=False):
         self.act_freq_reward = act_freq_reward
         self.temporal_predictor = temporal_predictor
         if self.temporal_predictor:  # is not None
             self.temp_pred_reward = True
         else:
             self.temp_pred_reward = False
-        
+        self.grpo = grpo
+        self.utility_function = utility_function
         self.task_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
         self.status = [[None for _ in range(num_processes)] for _ in range(num_steps)]
         self.action_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
@@ -22,7 +34,7 @@ class RolloutStorage(object):
             action_shape = 1
         else:
             action_shape = action_space.shape[0]
-        self.random_mask = torch.zeros(num_steps, num_processes, action_shape)
+        self.random_mask = torch.zeros(num_steps + 1, num_processes, action_shape)
         self.obs = torch.zeros(num_steps + 1, num_processes, *obs_shape)
         #hard-code to cases of max_new_tokens being smaller than 32
         self.output_ids = torch.zeros(
@@ -46,6 +58,7 @@ class RolloutStorage(object):
 
         self.num_steps = num_steps
         self.step = 0
+        self.prev_suc_step = 0
         self.temporal_predictor = temporal_predictor
         self.int_reward_scale = scale
 
@@ -59,13 +72,14 @@ class RolloutStorage(object):
         self.actions = self.actions.to(device)
         self.masks = self.masks.to(device)
         self.bad_masks = self.bad_masks.to(device)
+        self.random_mask = self.random_mask.to(device)
 
     def insert_task(self, tasks, command, status):
         self.task_texts[self.step] = tasks
         self.action_texts[self.step] = command
         self.status[self.step] = status
     def insert(self, obs, output_ids, actions, action_log_probs,
-               value_preds, rewards, masks, bad_masks, rand_mask):
+               value_preds, rewards, masks, bad_masks, rand_mask, fail=False, success=False):
         self.obs[self.step + 1].copy_(obs)
         self.output_ids[self.step].copy_(output_ids)
         self.actions[self.step].copy_(actions)
@@ -77,11 +91,20 @@ class RolloutStorage(object):
         self.bad_masks[self.step + 1].copy_(bad_masks)
         
         self.step = (self.step + 1) % self.num_steps
+        if self.grpo:
+            if fail and not success:
+                self.step =self.prev_suc_step
+            elif success and not fail:
+                self.prev_suc_step =self.step
 
     def after_update(self):
+        if self.grpo:
+            self.prev_suc_step = 0
+            return
         self.obs[0].copy_(self.obs[-1])
         self.masks[0].copy_(self.masks[-1])
         self.bad_masks[0].copy_(self.bad_masks[-1])
+        self.random_mask[0].copy_(self.random_mask[-1])
 
     def compute_returns(self,
                         next_value,
@@ -90,6 +113,31 @@ class RolloutStorage(object):
                         gae_lambda,
                         use_proper_time_limits=True,
                         num_update = 0):
+        if self.grpo or self.utility_function:
+            returns = self.returns
+            #returns = 'ab'
+            returns[-1] =0
+            rewards = self.rewards.clone()
+            if rewards [-1] == 0:
+                rewards[-1] = 0.1
+            mask = self.masks[1:] == 0.0
+            mask_r = self.rewards == 0
+            rewards[mask & mask_r] = 0.1
+            for step in reversed(range(self.rewards.size(0))):
+                #try:
+                self.returns[step] = rewards[step] + gamma * returns[step+1] * self.masks[step+ 1]
+                # except:
+                #     breakpoint()
+            if self.act_freq_reward:
+                self.freq_rewards = self.compute_freq_reward(scale=self.int_reward_scale)
+            self.temp_rewards = torch.zeros((1))
+            if self.temp_pred_reward:
+                temp_rewards = self.get_temp_rewards(self.temporal_predictor)
+                temp_rewards = temp_rewards * self.int_reward_scale
+                
+                if num_update > 0:
+                    self.temp_rewards = temp_rewards
+            return
         if use_proper_time_limits:
             if use_gae:
                 self.value_preds[-1] = next_value
@@ -140,8 +188,11 @@ class RolloutStorage(object):
                                mini_batch_size=None,
                                update_num=0
                                ):
-        num_steps, num_processes = self.rewards.size()[0:2]
-        batch_size = num_processes * num_steps
+        if self.grpo:
+            batch_size = self.prev_suc_step
+        else:
+            num_steps, num_processes = self.rewards.size()[0:2]
+            batch_size = num_processes * num_steps
         
         if self.temp_pred_reward:
             temp_rewards = self.temp_rewards#self.get_temp_rewards(self.temporal_predictor)
@@ -159,7 +210,7 @@ class RolloutStorage(object):
             temp_rewards = self.temp_rewards[:, None, None].to(advantages.device)
             advantages += temp_rewards
         sampler = BatchSampler(
-            SubsetRandomSampler(range(batch_size)),
+            SubsetSampler(range(batch_size)),
             mini_batch_size,
             drop_last=True)
         # obs =  self.obs[:-1].view(-1, *self.obs.size()[2:])
@@ -172,6 +223,8 @@ class RolloutStorage(object):
         #     obs = torch.cat((obs, success_samples[0]), dim=0)
         #     actions = torch.cat((actions, SuccessStorage[1]), dim=1)
         #     value_preds = torch.cat((value_preds))
+        #breakpoint()
+        #print(self.returns)
         for indices in sampler:
             obs_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[indices]
             actions_batch = self.actions.view(-1,
@@ -190,6 +243,28 @@ class RolloutStorage(object):
 
             yield obs_batch, output_ids_batch, actions_batch, \
                 value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
+    
+    def value_data_generator(self, mini_batch_size =1,):
+        num_steps, num_processes = self.rewards.size()[0:2]
+        batch_size = num_processes * num_steps
+        sampler = BatchSampler(
+            SubsetSampler(range(batch_size)),
+            mini_batch_size,
+            drop_last=False)
+        for indices in sampler:
+            obs1_batch = self.obs[:-1].view(-1, *self.obs.size()[2:])[indices]
+            obs2_batch = self.obs[1:].view(-1, *self.obs.size()[2:])[indices]
+            actions_batch = self.actions.view(-1,
+                                              self.actions.size(-1))[indices]
+            
+            masks_batch = self.masks[1:].view(-1, 1)[indices]
+
+            yield actions_batch, obs1_batch, obs2_batch, masks_batch
+
+    def save_action_log_probs(self, indices, log_probs):
+        flat = self.action_log_probs.reshape(-1, 1)
+        flat[indices] = log_probs.detach()
+        self.action_log_probs.copy_(flat.reshape(self.action_log_probs.shape))
 
     def copy_success_trajs(self, successRollout):
         # copies successful trajectories from current storage to successRollout
@@ -343,6 +418,131 @@ class RolloutStorage(object):
         return flat_starts, flat_ends, lengths
 
 
+
+
+class GRPO_buffer(object):
+
+    def __init__(self, num_steps, obs_shape, max_new_tokens, action_shape=1, temporal_predictor=None, act_freq_reward=False, scale = 0.006, grpo_group=4):
+        self.grpo_group = grpo_group
+        self.obs = torch.zeros(num_steps + 1, *obs_shape)
+        #hard-code to cases of max_new_tokens being smaller than 32
+        self.num_steps = num_steps
+        self.output_ids = torch.zeros(num_steps, grpo_group,  2*max_new_tokens).long()
+        self.rewards = torch.zeros(num_steps, 1)
+        self.values = torch.zeros(num_steps, 1)
+        self.ncorrects = torch.zeros(num_steps, 1)
+        self.advantages = torch.zeros(num_steps, grpo_group, 1)
+        self.penalties = torch.zeros(num_steps, grpo_group, 1)
+        self.action_log_probs = torch.zeros(num_steps, grpo_group, 1)
+        self.actions = torch.zeros(num_steps, action_shape)
+        self.step =0
+        self.zero = True
+        self.empty = True
+        self.new_indices = []
+
+    def insert(self, obs, output_ids, action_log_probs, reward, action, adv, penalty, value, ncorrect):
+        self.obs[self.step].copy_(obs.squeeze(0))
+        self.output_ids[self.step].copy_(output_ids)
+        self.action_log_probs[self.step].copy_(action_log_probs.unsqueeze(1))
+        self.rewards[self.step].copy_(reward)
+        self.values[self.step].copy_(value)
+        self.ncorrects[self.step].copy_(torch.tensor([ncorrect]))
+        self.actions[self.step].copy_(action.view(-1))
+        self.advantages[self.step].copy_(adv)
+        self.penalties[self.step].copy_(penalty)
+        if self.step == self.num_steps:
+            self.empty = False
+        self.new_indices.append(self.step)
+        self.step = (self.step + 1) % self.num_steps
+
+    def insert_old(self, obs, output_ids, action_log_probs, reward, action, adv, indices):
+        self.obs[indices].copy_(obs.squeeze(0))
+        self.output_ids[indices].copy_(output_ids)
+        self.action_log_probs[indices].copy_(action_log_probs.unsqueeze(1))
+        self.rewards[indices].copy_(reward)
+        self.actions[indices].copy_(action.view(-1))
+        self.advantages[indices].copy_(adv)
+        
+
+
+    def to(self, device):
+        self.obs = self.obs.to(device)
+        self.output_ids = self.output_ids.to(device)
+        self.rewards = self.rewards.to(device)
+        self.action_log_probs = self.action_log_probs.to(device)
+    
+    def comput_advantages(self):
+        rewards = self.rewards[:self.step + 1]
+        advantages = (rewards - rewards.mean())/rewards.std()  #TODO define the dim
+        self.advantages = advantages
+        return advantages
+    
+    def feed_forward_generator(self,
+                               mini_batch_size=1,
+                               update_num=0
+                               ):
+        # if self.empty:
+        #     batch_size = self.step
+        # else:
+        batch_size = self.num_steps
+        
+        print("grpo_buf size: ", batch_size)
+        sampler = BatchSampler(
+            SubsetRandomSampler(range(batch_size)),  #SubsetSampler
+            mini_batch_size,
+            drop_last=True)
+        
+        for indices in sampler:
+            obs_batch = self.obs[:-1].view(-1, *self.obs.size()[1:])[indices] #TODO check the -1 in here
+            actions_batch = self.actions.view(-1,
+                                              self.actions.size(-1))[indices]
+            output_ids_batch = self.output_ids.view(-1,self.grpo_group,
+                                              self.output_ids.size(-1))[indices]
+            rewards_batch = self.rewards.view(-1, 1)[indices]
+            value_batch = self.values.view(-1, 1)[indices]
+            penalty_batch = self.penalties.view(-1,self.grpo_group, 1)[indices]
+            old_action_log_probs_batch = self.action_log_probs.view(-1, self.grpo_group,
+                                                                    1)[indices]
+            adv_batch = self.advantages.view(-1, self.grpo_group, 1)[indices]
+            ncorrect_batch = self.ncorrects.view(-1, 1)[indices]
+            yield obs_batch, output_ids_batch, actions_batch, \
+                rewards_batch, adv_batch, old_action_log_probs_batch, penalty_batch, value_batch, ncorrect_batch
+
+    def old_feed_forward_generator(self,
+                               mini_batch_size=1,
+                               update_num=0
+                               ):
+        if self.empty:
+            batch_size = self.step
+        else:
+            batch_size = self.num_steps
+        
+        #all_indices = range(batch_size)
+        old_indices = list(set(range(batch_size)) - set(self.new_indices))
+
+        self.new_indices = []
+        if len(old_indices) == 0:
+            return None
+        
+        
+        #print("grpo_buf size: ", batch_size)
+        sampler = BatchSampler(
+            SubsetRandomSampler(old_indices),
+            mini_batch_size,
+            drop_last=True)
+        
+        for indices in sampler:
+            obs_batch = self.obs[:-1].view(-1, *self.obs.size()[1:])[indices] #TODO check the -1 in here
+            actions_batch = self.actions.view(-1,
+                                              self.actions.size(-1))[indices]
+            output_ids_batch = self.output_ids.view(-1,self.grpo_group,
+                                              self.output_ids.size(-1))[indices]
+            rewards_batch = self.rewards.view(-1, 1)[indices]
+            old_action_log_probs_batch = self.action_log_probs.view(-1, self.grpo_group,
+                                                                    1)[indices]
+            adv_batch = self.advantages.view(-1, self.grpo_group, 1)[indices]
+            yield obs_batch, output_ids_batch, actions_batch, \
+                rewards_batch, adv_batch, old_action_log_probs_batch, indices
 
 """
 class SuccessStorage(object):
