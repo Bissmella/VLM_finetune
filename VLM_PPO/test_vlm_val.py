@@ -215,7 +215,7 @@ def main():
     base_lora_config = LoraConfig(
             r=128,
             lora_alpha=256,
-            target_modules=["q_proj", "v_proj"],#find_all_linear_names(base,args.train_vision),
+            target_modules=["q_proj", "v_proj", "k_proj", "mlp.0", "mlp.2"],#find_all_linear_names(base,args.train_vision),
             lora_dropout=0.05,
             bias="none",
             task_type="CAUSAL_LM",
@@ -235,11 +235,12 @@ def main():
     ###
     #for loading lora weights for testing purposes
     
-    # lora_weights = torch.load("/home/bahaduri/RL4VLM/outputs/dk_VLM_eps_1_grpo_q25_3/model_6.checkpoint", map_location='cpu')
-    # lora_weights = {k.replace("value_model.", "", 1): v for k, v in lora_weights.items() if k.startswith("value_model.")}
+    lora_weights = torch.load("/home/bahaduri/RL4VLM/outputs/dk_VLM_eps_1_notht_util_3/model_20.checkpoint", map_location='cpu')
+    lora_weights = {k.replace("value_model.", "", 1): v for k, v in lora_weights.items() if k.startswith("value_model.")}
     
-    # missing_keys, unexpected_keys = value_model.load_state_dict(lora_weights, strict=False)
-    # print("**********", len(unexpected_keys))
+    missing_keys, unexpected_keys = value_model.load_state_dict(lora_weights, strict=False)
+    print("**********", len(unexpected_keys))
+    
     
     ###
     
@@ -527,7 +528,7 @@ def main():
                     step_2 = (step * j -1) + step
                 else:
                     step_2 = 0
-                epsilon = 1#max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 5000)) * (epsilon_start - epsilon_min))
+                epsilon = 0.15#1#max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 5000)) * (epsilon_start - epsilon_min))
                 if random.random() < epsilon:
                     args.action_sampling = True
                 else:
@@ -563,10 +564,12 @@ def main():
                         episode_success_rate.append(1)
                         status[i] = 1
                         success = True
+                        print("success !")
                     else:
                         episode_success_rate.append(0)
                         fail = True
                         status[i] = 0
+                        print("fail !")
                     episode_action_tokens_log_prob.append(action_tokens_log_prob[i].item())
                     running_episode_rewards[i] = 0
                     #tasks[i] = qs
@@ -609,6 +612,7 @@ def main():
 
         # obs = envs.reset()
         # rollouts.obs[0].copy_(obs)  #TODO for trajectory collection
+        print("epsidoe num/mean: ", len(episode_success_rate), np.mean(episode_success_rate))
         continue
         rollouts.compute_returns(next_value, args.use_gae, args.gamma,
                                  args.gae_lambda, args.use_proper_time_limits, j)

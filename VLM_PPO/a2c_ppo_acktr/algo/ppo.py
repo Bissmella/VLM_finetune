@@ -43,6 +43,36 @@ def reward_func(completions_in, solutions, raw_rewards, coef=0.1, groups = 4):
     #return the penalty and acc_r
     return 0.1 * format_r, reward, ncorrects
 
+def densify_rewards_1d(rewards, masks):
+    """
+    rewards: [N] tensor of rewards (float)
+    masks:   [N] tensor of 0/1 (0 = terminal step, 1 = ongoing)
+    
+    Output: densified rewards [N]
+    """
+    N = rewards.shape[0]
+    densified = torch.zeros_like(rewards)
+
+    # indices where trajectories end
+    terminal_idxs = (masks == 0).nonzero(as_tuple=False).squeeze(-1)
+
+    start = 0
+    for end in terminal_idxs.tolist():
+        traj_rewards = rewards[start:end+1]
+        last_reward = traj_rewards[-1].item()
+
+        if last_reward > 0:  
+            # success trajectory → copy last reward backward
+            densified[start:end+1] = 1
+        # else:
+        #     # failed trajectory → last = -1, others = 0.1
+        #     densified[start:end] = 0.08
+        #     densified[end] = 0.08
+
+        start = end + 1
+
+    return densified
+
 
 class LazySupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
@@ -207,6 +237,48 @@ class PPO():
                 "}}"
             )
 
+    def densify_rewards(self, rollouts):
+        masks = rollouts.masks[1:].view(-1)
+        rewards = rollouts.rewards.view(-1)
+        dense_rewards = densify_rewards_1d(rewards, masks)
+        actions_list = ["Turn left", "Turn right", "Move forward", "Pick up", "Unused",  "Toggle", "Unused"]
+        values = []
+        self.actor_critic.value_model.base.set_adapter("adversery")
+        data_generator = rollouts.value_data_generator(mini_batch_size = 6)
+        for sample in data_generator:
+            actions_batch, obs1_batch, obs2_batch, masks_batch = sample
+            texts = []
+            images = []
+            for i, action in enumerate(actions_batch):
+                mask = masks_batch[i]
+                obs1 = obs1_batch[i]
+                obs2 = obs2_batch[i]
+                act = actions_list[action]
+                if mask == 0.0:
+                    obs2 = obs1
+                query = self.value_query.format(action = act)
+                texts.append(query)
+                images.append([obs1, obs2])
+            #print("Active adapter in ppo value", self.actor_critic.base.active_adapter)
+            action_values, _ = self.actor_critic.calc_utility_batch(images, texts)
+            
+            values.extend(action_values)
+        values = torch.tensor(values, dtype=torch.float32)
+        mask_r = rollouts.rewards.view(-1) > 0
+        values[mask_r] = 0
+        values = torch.clamp(values, max=10)
+        values[values < 3] = 0
+        mask = values >= 3
+        values[mask] = (values[mask] - 2) / (10 - 2) * 10
+        values = values /10.0
+
+        values = values * dense_rewards * 0.04 #alpha =0.04
+        num_steps, num_procs, _ = rollouts.rewards.shape
+        values = values.reshape(num_steps, num_procs, 1)
+        
+        rollouts.dense_rewards = rollouts.rewards + values
+        self.actor_critic.value_model.base.set_adapter("policy")
+
     def get_values(self, rollouts):
         actions_list = ["Turn left", "Turn right", "Move forward", "Pick up", "Unused",  "Toggle", "Unused"]
         values = []
@@ -246,6 +318,11 @@ class PPO():
         rollouts.value_preds = values
         self.actor_critic.value_model.base.set_adapter("policy")
         #print("Active adapter in ppo after value", self.actor_critic.base.active_adapter)
+        # def hook(module, inp, out):
+        #     print("LoRA fired:", module)
+        # for n,m in self.actor_critic.named_modules():
+        #     if 'policy' in n:
+        #         m.register_forward_hook(hook)
         
 
     def update(self, rollouts, update_num):
@@ -256,6 +333,7 @@ class PPO():
             advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
         advantages = (advantages - advantages.mean()) / (
             advantages.std() + 1e-5)
+        
 
 
         value_loss_epoch = 0
@@ -266,6 +344,7 @@ class PPO():
         for e in range(self.ppo_epoch):
             data_generator = rollouts.feed_forward_generator(
                     advantages, self.mini_batch_size, update_num)
+            print("iter..", e)
             for sample in data_generator:
                 with self.accelerator.accumulate(self.actor_critic):
                     grad_step += 1
@@ -280,8 +359,8 @@ class PPO():
                         continue
                     old_action_log_probs_batch = old_action_log_probs_batch.to(action_log_probs.device).view(-1)
                     adv_targ = adv_targ.to(action_log_probs.device)
-                    value_preds_batch = value_preds_batch.to(values.device)
-                    return_batch = return_batch.to(values.device)
+                    value_preds_batch = value_preds_batch.to(action_log_probs.device)
+                    return_batch = return_batch.to(action_log_probs.device)
 
 
                     ratio = torch.exp(action_log_probs -
@@ -325,6 +404,30 @@ class PPO():
                             self.max_grad_norm
                         )
                     self.optimizer.step()
+                    # tmpmodel = self.accelerator.unwrap_model(self.actor_critic)
+                    # print("loss", loss)
+                    # print("LoRA grad sum:", sum(p.grad.detach().abs().sum().item() for n,p in tmpmodel.named_parameters() if 'lora' in n and p.grad is not None))
+                    # print("LoRApoliy grad sum:", sum(p.grad.detach().abs().sum().item() for n,p in tmpmodel.named_parameters() if 'policy' in n and p.grad is not None))
+                    # print("LoRAadversery grad sum:", sum(p.grad.detach().abs().sum().item() for n,p in tmpmodel.named_parameters() if 'adversery' in n and p.grad is not None))
+                    # print("opt_params:", sum(p.numel() for g in self.optimizer.param_groups for p in g['params']), "model_params:", sum(p.numel() for p in tmpmodel.parameters()))
+                    # for i, g in enumerate(self.optimizer.param_groups):
+                    #     print(f"Group {i}")
+                    #     for p in g['params']:
+                    #         for n, q in tmpmodel.named_parameters():
+                    #             if q is p:
+                    #                 print("   ", n, p.shape, "requires_grad=", p.requires_grad)
+                    # for i, g in enumerate(self.optimizer.param_groups):
+                    #     print(f"Group {i}, num params = {len(g['params'])}")
+                    #     for p in g['params'][:10]:  # just peek first 10
+                    #         print("   id:", id(p), "shape:", p.shape, "requires_grad=", p.requires_grad)
+                    
+                    # for n, p in tmpmodel.named_parameters():
+                    #     if "policy" in n:
+                    #         if p.grad is not None:
+                    #             print(n, "grad sum:", p.grad.abs().sum().item())
+                    #         else:
+                    #             print(n, "grad is None")
+                    # breakpoint()
                     self.optimizer.zero_grad()
 
                     value_loss_epoch += value_loss.item()
@@ -342,7 +445,13 @@ class PPO():
     
 
     def update_RLEF(self, rollouts, update_num):
-        advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
+        if self.utility_function:
+            self.get_values(rollouts)
+            advantages = rollouts.value_preds[:-1] * rollouts.returns[:-1]
+        else:
+            advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
+        advantages = (advantages - advantages.mean()) / (
+            advantages.std() + 1e-5)
         
         # advantages = (advantages - advantages.mean()) / (
         #     advantages.std() + 1e-5)
@@ -357,71 +466,77 @@ class PPO():
             data_generator = rollouts.feed_forward_generator(
                     advantages, self.mini_batch_size, update_num)
             for i, sample in enumerate(data_generator):
-                #with self.accelerator.accumulate(self.actor_critic):
-                grad_step += 1
-                obs_batch, output_ids_batch, actions_batch, \
-                value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                        adv_targ = sample
-                # Reshape to do in a single forward pass for all steps
-                values, action_log_probs = self.actor_critic.evaluate_actions_batch(
-                    obs_batch, output_ids_batch)
-                # values and action_log_probs on two different devices!! because they come from two llava
-                if torch.isnan(action_log_probs).any():
-                    continue
-                old_action_log_probs_batch = old_action_log_probs_batch.to(action_log_probs.device).view(-1)
-                adv_targ = adv_targ.to(action_log_probs.device)
-                value_preds_batch = value_preds_batch.to(values.device)
-                return_batch = return_batch.to(values.device)
+                with self.accelerator.accumulate(self.actor_critic):
+                    grad_step += 1
+                    obs_batch, output_ids_batch, actions_batch, \
+                    value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
+                            adv_targ = sample
+                    # Reshape to do in a single forward pass for all steps
+                    values, action_log_probs = self.actor_critic.evaluate_actions_batch(
+                        obs_batch, output_ids_batch)
+                    # values and action_log_probs on two different devices!! because they come from two llava
+                    if torch.isnan(action_log_probs).any():
+                        continue
+                    old_action_log_probs_batch = old_action_log_probs_batch.to(action_log_probs.device).view(-1)
+                    adv_targ = adv_targ.to(action_log_probs.device)
+                    value_preds_batch = value_preds_batch.to(values.device)
+                    return_batch = return_batch.to(values.device)
 
 
-                # ratio = torch.exp(action_log_probs -
-                #                 old_action_log_probs_batch)
-                
-                ## ratio clip, inspired by https://github.com/huggingface/trl/blob/5a233546ee48532eaeb24b89b8d0042147574688/trl/trainer/ppo_trainer.py#L1199
-                mask = (adv_targ > 0.004).float().squeeze(1)
-                action_loss = (-action_log_probs * mask).mean()
-                
-                if self.use_clipped_value_loss:
-                    value_pred_clipped = value_preds_batch + \
-                        (values - value_preds_batch).clamp(-self.clip_param, self.clip_param)
-                    value_losses = (values - return_batch).pow(2)
-                    value_losses_clipped = (
-                        value_pred_clipped - return_batch).pow(2)
-                    value_loss = 0.5 * torch.max(value_losses,
-                                                value_losses_clipped).mean()
-                else:
-                    value_loss = 0.5 * (return_batch - values).pow(2).mean()
+                    # ratio = torch.exp(action_log_probs -
+                    #                 old_action_log_probs_batch)
+                    
+                    ## ratio clip, inspired by https://github.com/huggingface/trl/blob/5a233546ee48532eaeb24b89b8d0042147574688/trl/trainer/ppo_trainer.py#L1199
+                    #mask = (adv_targ > 0.004).float().squeeze(1)
+                    weighted_advantage = torch.exp(adv_targ)
+                    action_loss = (-action_log_probs * weighted_advantage).mean()
+                    
+                    if not self.utility_function:
+                        if self.use_clipped_value_loss:
+                            value_pred_clipped = value_preds_batch + \
+                                (values - value_preds_batch).clamp(-self.clip_param, self.clip_param)
+                            value_losses = (values - return_batch).pow(2)
+                            value_losses_clipped = (
+                                value_pred_clipped - return_batch).pow(2)
+                            value_loss = 0.5 * torch.max(value_losses,
+                                                        value_losses_clipped).mean()
+                        else:
+                            value_loss = 0.5 * (return_batch - values).pow(2).mean()
 
-                try:
-                    assert not torch.isnan(value_loss), "value_loss is nan"
-                    assert not torch.isnan(action_loss), "action_loss is nan"
-                except:
-                    print("value/action loss is nan")
-                    exit(1)
-                loss = value_loss * self.value_loss_coef+action_loss
-                loss = loss/ self.gradient_accumulation_steps
-                self.accelerator.backward(loss)
-                if (i + 1) % self.gradient_accumulation_steps == 0:
-                    self.accelerator.clip_grad_norm_(
-                        self.actor_critic.parameters(),
-                        self.max_grad_norm
-                    )
+                        try:
+                            assert not torch.isnan(value_loss), "value_loss is nan"
+                            assert not torch.isnan(action_loss), "action_loss is nan"
+                        except:
+                            print("value/action loss is nan")
+                            exit(1)
+                        loss = value_loss * self.value_loss_coef+action_loss
+                        loss = loss/ self.gradient_accumulation_steps
+                    else:
+                        loss = action_loss
+                        value_loss = torch.tensor([0])
+                    self.accelerator.backward(loss)
+                    if self.accelerator.sync_gradients:
+
+                        self.accelerator.clip_grad_norm_(
+                            self.actor_critic.parameters(),
+                            self.max_grad_norm
+                        )
                     self.optimizer.step()
                     self.optimizer.zero_grad()
-                
-                """
-                if self.accelerator.sync_gradients:
+                    
+                    """
+                    if self.accelerator.sync_gradients:
 
-                    self.accelerator.clip_grad_norm_(
-                        self.actor_critic.parameters(),
-                        self.max_grad_norm
-                    )
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-                """
+                        self.accelerator.clip_grad_norm_(
+                            self.actor_critic.parameters(),
+                            self.max_grad_norm
+                        )
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+                    """
 
-                value_loss_epoch += value_loss.item()
-                action_loss_epoch += action_loss.item()
+                    value_loss_epoch += value_loss.item()
+                    action_loss_epoch += action_loss.item()
 
         value_loss_epoch /= grad_step
         action_loss_epoch /= grad_step

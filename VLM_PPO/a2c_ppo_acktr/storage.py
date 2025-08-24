@@ -18,7 +18,7 @@ class SubsetSampler(Sampler):
         return len(self.indices)
 
 class RolloutStorage(object):
-    def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens, temporal_predictor=None, act_freq_reward=False, scale = 0.006, grpo=False, utility_function=False):
+    def __init__(self, num_steps, num_processes, obs_shape, action_space, max_new_tokens, temporal_predictor=None, act_freq_reward=False, scale = 0.006, grpo=False, utility_function=False, dense_rewards=False):
         self.act_freq_reward = act_freq_reward
         self.temporal_predictor = temporal_predictor
         if self.temporal_predictor:  # is not None
@@ -27,6 +27,7 @@ class RolloutStorage(object):
             self.temp_pred_reward = False
         self.grpo = grpo
         self.utility_function = utility_function
+        self.dense_rewards_flag = dense_rewards
         self.task_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
         self.status = [[None for _ in range(num_processes)] for _ in range(num_steps)]
         self.action_texts = [[None for _ in range(num_processes)] for _ in range(num_steps)]
@@ -158,10 +159,14 @@ class RolloutStorage(object):
                         + (1 - self.bad_masks[step + 1]) * self.value_preds[step]
         else:
             if use_gae:
+                if self.dense_rewards_flag:
+                    rewards = self.dense_rewards
+                else:
+                    rewards = self.rewards
                 self.value_preds[-1] = next_value
                 gae = 0
-                for step in reversed(range(self.rewards.size(0))):
-                    delta = self.rewards[step] + gamma * self.value_preds[
+                for step in reversed(range(rewards.size(0))):
+                    delta = rewards[step] + gamma * self.value_preds[
                         step + 1] * self.masks[step +
                                                1] - self.value_preds[step]
                     gae = delta + gamma * gae_lambda * self.masks[step +
@@ -210,7 +215,7 @@ class RolloutStorage(object):
             temp_rewards = self.temp_rewards[:, None, None].to(advantages.device)
             advantages += temp_rewards
         sampler = BatchSampler(
-            SubsetSampler(range(batch_size)),
+            SubsetRandomSampler(range(batch_size)),
             mini_batch_size,
             drop_last=True)
         # obs =  self.obs[:-1].view(-1, *self.obs.size()[2:])

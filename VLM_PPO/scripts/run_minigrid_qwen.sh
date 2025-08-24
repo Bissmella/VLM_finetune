@@ -8,6 +8,8 @@ TEMP_PREDICTOR_FLAG=$5                          #"--temp-predictor"             
 ACT_FREQ_REWARD_FLAG=$6                              #"--act-freq-reward"     #""
 GROUP=$7                                               #"vlm-tmp-cur"
 ALGO_FLAG=$8
+ACT_SAMPLE_FLAG=$9
+RLEF_FLAG=${10}
 USE_WANDB_FLAG="--use-wandb"   #--use-wandb"            #""              #  #MiniGrid-Empty-Random-6x6-v0   #MiniGrid-DoorKey-6x6-v0
 
 
@@ -26,18 +28,19 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --n
     --num-steps 512 \
     --grad-accum-steps 64 \
     --max-new-tokens 256 \
-    --thought-prob-coef 0.3 \
+    --thought-prob-coef 0.0 \
     --use-gae \
     --seed $SEED \
     --temperature 1.0 \
     --ppo-epoch 3 \
-    --mini-batch-size 1 \
+    --mini-batch-size 2 \
     --model-path "Qwen/Qwen2.5-VL-3B-Instruct" \
     --use-lora \
     --train-vision all \
     --save-dir "$SAVE_DIR" \
-    --action-sampling  \
+    $ACT_SAMPLE_FLAG  \
     $ALGO_FLAG \
+    $RLEF_FLAG \
     $ACT_FREQ_REWARD_FLAG \
     $TEMP_PREDICTOR_FLAG \
     $USE_WANDB_FLAG \

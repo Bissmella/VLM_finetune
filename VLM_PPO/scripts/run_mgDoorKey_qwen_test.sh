@@ -23,20 +23,21 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=
     --lr_max_steps 25 \
     --eval-num-per-episode 8 \
     --num-env-steps 15000 \
-    --num-steps 7 \
-    --grad-accum-steps 128 \
+    --num-steps 12 \
+    --grad-accum-steps 2 \
     --max-new-tokens 256 \
     --thought-prob-coef 0.3 \
     --use-gae \
     --seed $SEED \
     --temperature 1.0 \
     --ppo-epoch 4 \
-    --mini-batch-size 2 \
+    --mini-batch-size 1 \
     --model-path "Qwen/Qwen2.5-VL-3B-Instruct" \
     --use-lora \
     --train-vision all \
     --save-dir "$SAVE_DIR" \
-    --action-sampling \
+    --utility-func \
+    --action-sampling  \
     $ACT_FREQ_REWARD_FLAG \
     $TEMP_PREDICTOR_FLAG \
     $USE_WANDB_FLAG \

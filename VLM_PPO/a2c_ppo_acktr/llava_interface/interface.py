@@ -307,7 +307,7 @@ def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, proce
             return values, sum_log_prob, action_tokens_log_prob
     ## omitting the second token for calculating log prob, because its logprb is very very small
     thought_log_prob = torch.sum(selected_log_probs[:,1:match_index-1], dim = 1)
-
+    
     action_tokens_log_prob = torch.sum(selected_log_probs[:,match_index-1:], dim = 1)
     sum_log_prob = thought_prob_coef*thought_log_prob + action_tokens_log_prob
     return values, sum_log_prob, action_tokens_log_prob
@@ -368,6 +368,7 @@ def qwen_evaluate_batch(value_model, output_ids, temperature, thought_prob_coef,
     matches = (unfolded == target).all(dim = -1)
     
     match_index = matches.nonzero(as_tuple=True)[-1]
+    
     if match_index.shape[0] >= 1:
         ## if we find multuple patterns, we will take the last one, and make it size torch.Size([1])
         match_index = match_index[-1].unsqueeze(0)

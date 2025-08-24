@@ -1,4 +1,4 @@
-DEVICES="0,1,2,3"
+DEVICES="0"
 NUM_PROCESS=1
 SEED=2            # $1                #
 WANDB_RUN="run1"      #$2     #
@@ -16,14 +16,14 @@ if [ ! -d "$SAVE_DIR" ]; then
     echo "Created directory: $SAVE_DIR"
 fi
 
-TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=1 accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero3.yaml --main_process_port $PORT ../vlm_traj_label.py \
+TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=1 accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero2.yaml --main_process_port $PORT ../test_vlm_val.py \
     --env-name MiniGrid-DoorKey-6x6-v0 \
     --init-lr 1e-5 \
     --end-lr 1e-9 \
     --lr_max_steps 25 \
     --eval-num-per-episode 8 \
     --num-env-steps 15000 \
-    --num-steps 7 \
+    --num-steps 512 \
     --grad-accum-steps 128 \
     --max-new-tokens 256 \
     --thought-prob-coef 0.3 \
@@ -32,7 +32,7 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=
     --temperature 1.0 \
     --ppo-epoch 4 \
     --mini-batch-size 1 \
-    --model-path "Qwen/Qwen2.5-VL-32B-Instruct" \
+    --model-path "Qwen/Qwen2.5-VL-3B-Instruct" \
     --use-lora \
     --train-vision all \
     --save-dir "$SAVE_DIR" \

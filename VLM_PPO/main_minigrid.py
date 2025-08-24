@@ -211,13 +211,22 @@ def main():
         hidden_dim = 2048
     else:
         hidden_dim = 1536
-    value_model = QwenVLMValue(base, processor, hidden_dim, grpo = True) #args.grpo) if grpo then there will be no value head
+    if args.dense_rewards:
+        no_value = False
+    elif args.utility_func:
+        no_value = True
+    value_model = QwenVLMValue(base, processor, hidden_dim, grpo = no_value) #args.grpo) if grpo then there will be no value head
     ###
     #for loading lora weights for testing purposes
     """
-    lora_weights = torch.load("/home/bahaduri/RL4VLM/outputs/dk_VLM_eps_1_grpo_q25_3/model_6.checkpoint", map_location='cpu')
+    # pretrained = torch.load("/home/bahaduri/RL4VLM/outputs/sft/value_lora/policy/adapter_model.bin", map_location="cpu")
+
+    # # sum of pretrained weights
+    # pretrained_sum = sum(v.abs().sum().item() for v in pretrained.values())
+    # print("Pretrained LoRA weight sum:", pretrained_sum)
+    lora_weights = torch.load("/home/bahaduri/RL4VLM/outputs/dk_VLM_eps_1_notht_util/model_10.checkpoint", map_location='cpu')
     lora_weights = {k.replace("value_model.", "", 1): v for k, v in lora_weights.items() if k.startswith("value_model.")}
-    
+    print("LoRA weight sum:", sum(v.abs().sum().item() for v in lora_weights.values()))
     missing_keys, unexpected_keys = value_model.load_state_dict(lora_weights, strict=False)
     print("**********", len(unexpected_keys))
     """
@@ -268,7 +277,8 @@ def main():
           'params': [p for n, p in actor_critic.value_model.named_parameters() if ("lora_A.adversery" not in n and "lora_B.adversery" not in n)], 'weight_decay': args.weight_decay, 'lr': args.init_lr, 'eps':args.eps,
           }
     ]
-    optimizer = optim.Adam(actor_critic.value_model.parameters(), lr=args.init_lr, eps=args.eps, weight_decay=args.weight_decay) #optimizer_grouped_parameters)#
+    
+    optimizer = optim.Adam([p for p in actor_critic.value_model.parameters() if p.requires_grad], lr=args.init_lr, eps=args.eps, weight_decay=args.weight_decay) #optimizer_grouped_parameters)#
 
     lr_scheduler = optim.lr_scheduler.LambdaLR(
         optimizer,
@@ -325,7 +335,7 @@ def main():
                 utility_function = args.utility_func)
     
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
-                              envs.observation_space.shape, envs.action_space, args.max_new_tokens, temporal_predictor, args.act_freq_reward, scale=0.00025, grpo=False, utility_function= args.utility_func)#args.grpo)
+                              envs.observation_space.shape, envs.action_space, args.max_new_tokens, temporal_predictor, args.act_freq_reward, scale=0.00025, grpo=False, utility_function= args.utility_func, dense_rewards = args.dense_rewards)#args.grpo)
     
     image_tensor = obs.squeeze(0).permute(2,0,1).float()
     if image_tensor.max().item() <= 1.0:
@@ -364,6 +374,7 @@ def main():
     num_explore = int(args.explore_portion*num_updates)
     prev_infos = []
     infos = []
+    
     for j in tqdm(range(num_updates)):
         n_start = False
         for step in range(args.num_steps):
@@ -392,14 +403,14 @@ def main():
             #reward = reward + random_mask * (-0.5)
             # if step % 4 == 0:
             #     #if random.random() < 0.5:
-            #     reward += 0.64  #TODO for testing
+            #     reward += 0.21  #TODO for testing
             #epsilon greedy
             if use_epsilon:
                 if j > 1:
                     step_2 = (step * j -1) + step
                 else:
                     step_2 = 0
-                epsilon = max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 5000)) * (epsilon_start - epsilon_min))
+                epsilon = max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 8000)) * (epsilon_start - epsilon_min))
                 if random.random() < epsilon:
                     args.action_sampling = True
                 else:
@@ -459,7 +470,7 @@ def main():
             fail = False
             #print("step: ", step)
         print("****** iteration number:{} ******".format(j))
-        #print("****Epsilon:", epsilon)
+        print("****Epsilon:", epsilon)
         print("prompt:{}".format(prompt))
         print("text_action:{}".format(text_action))
         #print("current observation:{}".format(prev_infos))
@@ -480,7 +491,8 @@ def main():
         else:
             tmp_info = {"temp_predictor.loss": 0, "temp_predictor.acc": 0}
 
-        
+        if args.dense_rewards:
+            agent.densify_rewards(rollouts)
         rollouts.compute_returns(next_value, args.use_gae, args.gamma,
                                  args.gae_lambda, args.use_proper_time_limits, j)
         if args.grpo:

@@ -197,6 +197,7 @@ def get_args():
     parser.add_argument("--rlef", default=False, action='store_true')
     parser.add_argument("--grpo", default=False, action='store_true') 
     parser.add_argument("--utility-func", default=False, action='store_true')
+    parser.add_argument("--dense-rewards", default=False, action='store_true')
 
     args = parser.parse_args()
 

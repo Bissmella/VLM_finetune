@@ -85,8 +85,8 @@ def get_prompt(env_name, action_only,sampling = False, infos = None):
             qs = "You are an expert 2D game player in a grid-based environment. "
             qs += "You are observing the image of the current state, and your goal is to get the player to the pink goal square/tile. "
             qs += "The player is shown by cyan triangle.The tip (pointy end) of the triangle is the direction the player is facing, the flat side is the back. In the game the player must pick up a key to unlock the door. The square with a minus (-) and blue or yellow color is the closed door. The player shuold reach the pink goal tile to win. "
-            qs += "At each step the possible actions are: ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key was in front of it in first image, 'Toggle': toggle door only if door was infront of it in first image]. "
-            qs += "Please evaluate each action based on the current observation and assign a score between 1 (very bad) and 5 (very good), reflecting how useful or promising each action is in reaching the goal. Use only the available information and image.\n"
+            qs += "At each step the possible actions are: ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key is in front of it, 'Toggle': toggle door to open it only if door is infront of it]. "
+            qs += "Please evaluate each action based on the current observation and assign a score between 1 (very bad) and 5 (very good), based on how useful or promising each action is in reaching the goal. Use only the available information and image.\n"
             qs += "Return your answer as a valid JSON object in the following format:\n{\n"
             qs += '  "thoughts": "Describe briefly the current state of the agent as seen in the image.",\n' #Briefly describe only the current scene, position and direction of the agent shown by an arrow, and other objects by describing the current image.
             qs += '  "action_scores": {\n'
@@ -109,7 +109,7 @@ def get_prompt(env_name, action_only,sampling = False, infos = None):
             qs = "You are an expert 2D game player in a grid-based environment. "
             qs += "You are observing the image of the current state, and your goal is to get the player to the pink goal square/tile. "
             qs += "The player is shown by cyan triangle.The tip (pointy end) of the triangle is the direction the player is facing, the flat side is the back. In the game the player must pick up a key to unlock the door. The square with a minus (-) and blue or yellow color is the closed door. The player shuold reach the pink goal tile to win. "
-            qs += "At each step the possible actions are: ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key was in front of it in first image, 'Toggle': toggle door only if door was infront of it in first image]. "
+            qs += "At each step the possible actions are: ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key is in front of it, 'Toggle': toggle door to open it only if door is infront of it]. "
             qs = qs + "Your response should be a valid json object in the following format: \{\n"
             #qs = qs + "\"action\": \"your choosen action\" "
             #qs = qs + "\"thoughts\": \"Describe the current scene and state of the agent as seen in the image.\", \n"  ##Describe the current scene step-by-step and explain the visible area, position and facing direction of the player, nearby objects, or interactive elements with their relative locations.
@@ -221,6 +221,8 @@ def text_projection(text_actions: List[str], env_name):
             random_mask.append(0)
         else:
             # The string contains none or multiple keywords, randomly select an index from action_list
+            print("Random action! ")
+            print(text_actions)
             output_indices.append(random.choice(list(id_to_action.keys())))
             random_mask.append(1)
         commands.append(action_list[output_indices[-1]])
@@ -234,6 +236,7 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
         output_indices = []
         random_mask = []
         commands = []
+        log_probs = []
         
         if env_name == 'gym_cards/NumberLine-v0':
             action_list = ["-", "+"]
@@ -263,11 +266,15 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
         for string in text_actions:
             try:
                 string = string.lower()
-                match = re.search(r"```(?:json)?\n(.*?)\n```", string, re.DOTALL)
+                match = re.search(r"```(?:json)?\n(.*?)(?:\n```|$)", string, re.DOTALL)
                 if match:
                     string = match.group(1)
                 else:
                     string = string.strip()
+                
+                string = re.sub(r"//.*", "", string)
+                string = re.sub(r"#.*", "", string)
+                string = re.sub(r",\s*([}\]])", r"\1", string)
                 response_json = json.loads(string)
                 action_scores = response_json["action_scores"]
                 
@@ -275,27 +282,32 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
                 scores_r = [action_scores.get(action.lower(), 0) if "Unused" not in action else -float('inf') for action in action_list]
                 scores = torch.tensor(scores_r, dtype=torch.float32)
                 # Softmax for sampling
-                probs = torch.nn.functional.softmax(scores / 2.5, dim=0)  #TODO 1.5 is a temperature hardcoded
+                probs = torch.nn.functional.softmax(scores / 1.5, dim=0)  #TODO 1.5 is a temperature hardcoded
                 
                 sampled_index = torch.multinomial(probs, num_samples=1).item()
-                chosen_action = action_list[sampled_index]
-                output_indices.append(sampled_index)
+                max_index = torch.argmax(probs).item()
+                log_prob = torch.log(probs[sampled_index] + 1e-8)
+                chosen_action = action_list[sampled_index] #max_index] #
+                output_indices.append(sampled_index) #max_index) #
                 commands.append(chosen_action)
                 random_mask.append(0)
+                log_probs.append(log_prob)
                 # print("Sampled Action:", chosen_action)
                 # print("Probabilities:", probs)
             except:
                 scores = [1 if "Unused" not in action else -float('inf') for action in action_list]
                 probs = torch.nn.functional.softmax(torch.tensor(scores, dtype=torch.float32), dim=0)
                 sampled_index = torch.multinomial(probs, num_samples=1).item()
+                log_prob = torch.log(probs[sampled_index] + 1e-8)
                 chosen_action = action_list[sampled_index]
                 output_indices.append(sampled_index)
                 commands.append(chosen_action)
                 random_mask.append(1)
+                log_probs.append(log_prob)
                 print("taken random action !!")
                 # print("JSON parse error:", e)
         
-        return torch.Tensor([output_indices]).long().reshape(-1, 1), torch.Tensor([random_mask]).long().reshape(-1, 1), commands
+        return torch.Tensor([output_indices]).long().reshape(-1, 1), torch.Tensor([random_mask]).long().reshape(-1, 1), commands, torch.tensor(log_probs, dtype=torch.bfloat16)
 
 
 # def generate_fake_response(outputs: List[str], commands: List[str], env_name=""):
