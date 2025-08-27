@@ -225,6 +225,7 @@ def main():
         if args.temp_predictor:
             from a2c_ppo_acktr.temp_predictor import Temp_predictor
             base.add_adapter(adapter_name="adversery", peft_config=base_lora_config)
+        base.load_adapter("/home/bahaduri/RL4VLM/outputs/sft/value_lora/policy", "policy")
         base.set_adapter("policy")
 
     if "Qwen2.5" in model_path:
@@ -503,6 +504,7 @@ def main():
                 # INPUT_IDS[INPUT_IDS == 0] = 259 # 869: . (period), 29871: SPIECE, 259: whitespace
 
                 image_tensor = rollouts.obs[step].squeeze(0).permute(2,0,1).float() #TODO rollouts.obs[step] needs to be checked if expected shape
+                
                 if image_tensor.max() <= 1.0:
                     image_tensor = (image_tensor * 255).byte()
                 to_pil = T.ToPILImage()
@@ -513,11 +515,12 @@ def main():
                 #image.save(f'/home/bahaduri/RL4VLM/outputs/{j}_{step}.png') 
                 value, output_id, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(
                         image, text = INPUT_IDS)
-                save_image_action(trajNum, step, image, command)
+                #save_image_action(trajNum, step, image, command)
             text_action = processor.decode(list(filter(lambda num: num != 151643, output_id[0].tolist()))) #151643 is the pad_token for the qwen model #TODO hardcoded
             prev_infos = copy.deepcopy(infos)
             
             obs, reward, done, infos = envs.step(action)
+            
             #reward = reward + random_mask * (-0.5)
             # if step % 4 == 0:
             #     #if random.random() < 0.5:
@@ -528,7 +531,7 @@ def main():
                     step_2 = (step * j -1) + step
                 else:
                     step_2 = 0
-                epsilon = 0.15#1#max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 5000)) * (epsilon_start - epsilon_min))
+                epsilon = 0.0#1#max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 5000)) * (epsilon_start - epsilon_min))
                 if random.random() < epsilon:
                     args.action_sampling = True
                 else:

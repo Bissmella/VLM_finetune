@@ -284,6 +284,7 @@ class PPO():
         values = []
         self.actor_critic.value_model.base.set_adapter("adversery")
         data_generator = rollouts.value_data_generator(mini_batch_size = 4)
+        total_bad_util =0
         for sample in data_generator:
             actions_batch, obs1_batch, obs2_batch, masks_batch = sample
             texts = []
@@ -299,7 +300,9 @@ class PPO():
                 texts.append(query)
                 images.append([obs1, obs2])
             #print("Active adapter in ppo value", self.actor_critic.base.active_adapter)
-            action_values, _ = self.actor_critic.calc_utility_batch(images, texts)
+            action_values, outputs, bad_util = self.actor_critic.calc_utility_batch(images, texts)
+            total_bad_util += bad_util
+            
             
             values.extend(action_values)
         values.append(0)
@@ -309,13 +312,16 @@ class PPO():
         
         mask = rollouts.masks[1:].view(-1) == 0.0
         avg = torch.mean(values[:-1][~mask])
-        values[:-1][mask & ~mask_r] = avg
+        mask_bad_util = values == -1
+        values[:-1][mask & ~mask_r] = avg  #setting failed endings to average
+        values[mask_bad_util] = avg        #setting bad utility estimates (no utility estimate) to average
         values = torch.clamp(values, max=10) 
         values = values /10.0
         
         num_steps, num_procs, _ = rollouts.value_preds.shape
         values = values.reshape(num_steps, num_procs, 1)
         rollouts.value_preds = values
+        print("total bad utility: ", total_bad_util)
         self.actor_critic.value_model.base.set_adapter("policy")
         #print("Active adapter in ppo after value", self.actor_critic.base.active_adapter)
         # def hook(module, inp, out):
@@ -326,8 +332,12 @@ class PPO():
         
 
     def update(self, rollouts, update_num):
+        random_mask = rollouts.random_mask == 1
+        rollouts.returns[random_mask] = -1
         if self.utility_function:
             self.get_values(rollouts)
+            
+            rollouts.value_preds[random_mask] = 1
             advantages = rollouts.value_preds[:-1] * rollouts.returns[:-1]
         else:
             advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
@@ -341,6 +351,9 @@ class PPO():
         dist_entropy_epoch = 0
         grad_step = 0
         self.actor_critic.train()
+        # adv_quant = torch.quantile(advantages, 0.6)
+        # #breakpoint()
+        Min_weight = torch.tensor([0.0])
         for e in range(self.ppo_epoch):
             data_generator = rollouts.feed_forward_generator(
                     advantages, self.mini_batch_size, update_num)
@@ -350,9 +363,10 @@ class PPO():
                     grad_step += 1
                     obs_batch, output_ids_batch, actions_batch, \
                     value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
-                            adv_targ = sample
+                            adv_targ, act_sampling_batch = sample
                     # Reshape to do in a single forward pass for all steps
-                    values, action_log_probs = self.actor_critic.evaluate_actions_batch(
+                    
+                    values, action_log_probs = self.actor_critic.evaluate_actions(
                         obs_batch, output_ids_batch)
                     # values and action_log_probs on two different devices!! because they come from two llava
                     if torch.isnan(action_log_probs).any():
@@ -371,9 +385,13 @@ class PPO():
                                         1.0 + self.clip_param) * adv_targ
                     ## ratio clip, inspired by https://github.com/huggingface/trl/blob/5a233546ee48532eaeb24b89b8d0042147574688/trl/trainer/ppo_trainer.py#L1199
                     if torch.any(ratio > 10):
-                        action_loss = -surr2.mean()
+                        ppo_loss = -surr2.mean()
                     else:
-                        action_loss = -torch.min(surr1, surr2).mean()
+                        ppo_loss = -torch.min(surr1, surr2).mean()
+                    bc_loss = (- action_log_probs * torch.clamp(adv_targ, min=0.0)).mean()
+                    act_sampling_batch = act_sampling_batch.to(action_log_probs.device)
+                    action_loss = act_sampling_batch * bc_loss + (1- act_sampling_batch) * ppo_loss
+                    # print(action_loss)
                     if not self.utility_function:
                         if self.use_clipped_value_loss:
                             value_pred_clipped = value_preds_batch + \
@@ -396,6 +414,7 @@ class PPO():
                     else:
                         loss = action_loss
                         value_loss = torch.tensor([0])
+                    # print("total loss: ", loss)
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
 
@@ -462,6 +481,7 @@ class PPO():
         dist_entropy_epoch = 0
         grad_step = 0
         self.actor_critic.train()
+        Max_weight = torch.tensor([10])
         for e in range(self.ppo_epoch):
             data_generator = rollouts.feed_forward_generator(
                     advantages, self.mini_batch_size, update_num)
@@ -489,6 +509,7 @@ class PPO():
                     ## ratio clip, inspired by https://github.com/huggingface/trl/blob/5a233546ee48532eaeb24b89b8d0042147574688/trl/trainer/ppo_trainer.py#L1199
                     #mask = (adv_targ > 0.004).float().squeeze(1)
                     weighted_advantage = torch.exp(adv_targ)
+                    weighted_advantage = torch.minimum(weighted_advantage, Max_weight.to(weighted_advantage.device))
                     action_loss = (-action_log_probs * weighted_advantage).mean()
                     
                     if not self.utility_function:

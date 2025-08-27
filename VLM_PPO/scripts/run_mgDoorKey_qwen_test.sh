@@ -45,6 +45,9 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=
     --wandb-project "minigrid" \
     --wandb-run "$WANDB_RUN" \
     --wandb-group "$GROUP"
+    #     --utility-func \
+    # --action-sampling  \
+    #--rlef \
     #    --action-sampling  \
     # --use-wandb \
     # --q4

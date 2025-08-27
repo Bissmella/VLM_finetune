@@ -322,7 +322,8 @@ def qwen_evaluate_batch(value_model, output_ids, temperature, thought_prob_coef,
     input = input.to(value_model.base.device)
     
     if input['input_ids'].size(0) != 1:
-        input['input_ids'] = input['input_ids'].broadcast_to(output_ids.size(0), input['input_ids'].size(-1)) #Mking them with same batch size
+        #input['input_ids'] = input['input_ids'].broadcast_to(output_ids.size(0), input['input_ids'].size(-1)) #Mking them with same batch size
+        input['input_ids'] = input['input_ids'].repeat(output_ids.size(0), 1)
     
     input['input_ids'] = torch.cat([input["input_ids"], output_ids], dim=1)
     input['attention_mask'] = torch.ones_like(input['input_ids'], dtype=torch.long).to(input['input_ids'].device)
@@ -353,6 +354,7 @@ def qwen_evaluate_batch(value_model, output_ids, temperature, thought_prob_coef,
         values = torch.tensor([0])
     
     #values = value_model.value_head(hidden_states)
+    #scores = scores[:, input_token_len:-1, :]
     scores = scores * (1/temperature)
     scores = scores.to(torch.float32)
     log_probs = torch.nn.functional.log_softmax(scores, dim=-1)

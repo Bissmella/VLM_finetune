@@ -28,12 +28,12 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --n
     --num-steps 512 \
     --grad-accum-steps 64 \
     --max-new-tokens 256 \
-    --thought-prob-coef 0.0 \
+    --thought-prob-coef 0.3 \
     --use-gae \
     --seed $SEED \
     --temperature 1.0 \
     --ppo-epoch 3 \
-    --mini-batch-size 2 \
+    --mini-batch-size 1 \
     --model-path "Qwen/Qwen2.5-VL-3B-Instruct" \
     --use-lora \
     --train-vision all \

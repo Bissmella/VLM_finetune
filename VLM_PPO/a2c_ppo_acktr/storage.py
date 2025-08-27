@@ -41,6 +41,7 @@ class RolloutStorage(object):
         self.output_ids = torch.zeros(
             num_steps, num_processes, 2*max_new_tokens).long()
         self.rewards = torch.zeros(num_steps, num_processes, 1)
+        self.act_policy = torch.zeros(num_steps, num_processes, 1)
         self.value_preds = torch.zeros(num_steps + 1, num_processes, 1)
         self.returns = torch.zeros(num_steps + 1, num_processes, 1)
         self.action_log_probs = torch.zeros(num_steps, num_processes, 1)
@@ -80,7 +81,7 @@ class RolloutStorage(object):
         self.action_texts[self.step] = command
         self.status[self.step] = status
     def insert(self, obs, output_ids, actions, action_log_probs,
-               value_preds, rewards, masks, bad_masks, rand_mask, fail=False, success=False):
+               value_preds, rewards, masks, bad_masks, rand_mask, action_sampling, fail=False, success=False, ):
         self.obs[self.step + 1].copy_(obs)
         self.output_ids[self.step].copy_(output_ids)
         self.actions[self.step].copy_(actions)
@@ -90,6 +91,7 @@ class RolloutStorage(object):
         self.random_mask[self.step].copy_(rand_mask)  #action was selected randomly and does not come from policy
         self.masks[self.step + 1].copy_(masks)
         self.bad_masks[self.step + 1].copy_(bad_masks)
+        self.act_policy[self.step].copy_(action_sampling)
         
         self.step = (self.step + 1) % self.num_steps
         if self.grpo:
@@ -119,11 +121,11 @@ class RolloutStorage(object):
             #returns = 'ab'
             returns[-1] =0
             rewards = self.rewards.clone()
-            if rewards [-1] == 0:
-                rewards[-1] = 0.1
-            mask = self.masks[1:] == 0.0
-            mask_r = self.rewards == 0
-            rewards[mask & mask_r] = 0.1
+            # if rewards [-1] == 0:
+            #     rewards[-1] = 0.1
+            # mask = self.masks[1:] == 0.0
+            # mask_r = self.rewards == 0
+            # rewards[mask & mask_r] = 0.1
             for step in reversed(range(self.rewards.size(0))):
                 #try:
                 self.returns[step] = rewards[step] + gamma * returns[step+1] * self.masks[step+ 1]
@@ -241,13 +243,14 @@ class RolloutStorage(object):
             masks_batch = self.masks[:-1].view(-1, 1)[indices]
             old_action_log_probs_batch = self.action_log_probs.view(-1,
                                                                     1)[indices]
+            act_sampling_batch = self.act_policy.view(-1, 1)[indices]
             if advantages is None:
                 adv_targ = None
             else:
                 adv_targ = advantages.view(-1, 1)[indices]
 
             yield obs_batch, output_ids_batch, actions_batch, \
-                value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
+                value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ, act_sampling_batch
     
     def value_data_generator(self, mini_batch_size =1,):
         num_steps, num_processes = self.rewards.size()[0:2]

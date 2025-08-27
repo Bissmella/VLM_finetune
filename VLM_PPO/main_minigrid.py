@@ -215,6 +215,8 @@ def main():
         no_value = False
     elif args.utility_func:
         no_value = True
+    else:
+        no_value = False
     value_model = QwenVLMValue(base, processor, hidden_dim, grpo = no_value) #args.grpo) if grpo then there will be no value head
     ###
     #for loading lora weights for testing purposes
@@ -369,7 +371,7 @@ def main():
     running_episode_rewards = torch.zeros(args.num_processes).flatten()
 
     epsilon_start = 1.0
-    epsilon_min = 0.05
+    epsilon_min = 0.0
     epsilon_decay = 0.995
     num_explore = int(args.explore_portion*num_updates)
     prev_infos = []
@@ -377,6 +379,12 @@ def main():
     
     for j in tqdm(range(num_updates)):
         n_start = False
+        if use_epsilon:
+            if j > 1:
+                step_2 = (args.num_steps * j -1) + args.num_steps
+            else:
+                step_2 = 0
+            epsilon = max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 8000)) * (epsilon_start - epsilon_min))
         for step in range(args.num_steps):
             # Sample actions
             with torch.no_grad():
@@ -405,12 +413,13 @@ def main():
             #     #if random.random() < 0.5:
             #     reward += 0.21  #TODO for testing
             #epsilon greedy
+            current_action_sampling = args.action_sampling
             if use_epsilon:
-                if j > 1:
-                    step_2 = (step * j -1) + step
-                else:
-                    step_2 = 0
-                epsilon = max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 8000)) * (epsilon_start - epsilon_min))
+                # if j > 1:
+                #     step_2 = (step * j -1) + step
+                # else:
+                #     step_2 = 0
+                # epsilon = max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 8000)) * (epsilon_start - epsilon_min))
                 if random.random() < epsilon:
                     args.action_sampling = True
                 else:
@@ -465,12 +474,13 @@ def main():
                 [[0.0] if 'bad_transition' in info.keys() else [1.0] for info in infos])
             rollouts.insert_task(tasks, command, status)  #TODO check command is a nice list
             rollouts.insert(obs, output_id, action,
-                            action_log_prob, value, reward, masks, bad_masks, random_mask, fail= fail, success = success)
+                            action_log_prob, value, reward, masks, bad_masks, random_mask, torch.tensor([[current_action_sampling]]).float(), fail= fail, success = success)
             success = False
             fail = False
             #print("step: ", step)
         print("****** iteration number:{} ******".format(j))
-        print("****Epsilon:", epsilon)
+        if use_epsilon:
+            print("****Epsilon:", epsilon)
         print("prompt:{}".format(prompt))
         print("text_action:{}".format(text_action))
         #print("current observation:{}".format(prev_infos))

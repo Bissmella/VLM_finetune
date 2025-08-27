@@ -373,12 +373,12 @@ class QwenVLMPolicy(nn.Module):
                                                         image=image,
                                                         args = self.args)
             action, random_mask, command, log_prob = self.projection_f(text_action, action_sampling = self.args.action_sampling)
-            if random_mask == 0 or not self.args.grpo:  #in the case of grpo the output_ids will be regenerated anyway
-                fake_response = generate_fake_response( text_action, command)
-            
-                f_response_encoded = self.processor.tokenizer(fake_response, padding=True, return_tensors="pt")["input_ids"]
-            else:
-                f_response_encoded = output_ids_trimmed
+            #if random_mask == 1:# or not self.args.grpo:  #in the case of grpo the output_ids will be regenerated anyway
+            fake_response = generate_fake_response( text_action, command)
+        
+            f_response_encoded = self.processor.tokenizer(fake_response, padding=True, return_tensors="pt")["input_ids"]
+            # else:
+            #     f_response_encoded = output_ids_trimmed
             padded_output_ids_trimmed = pad_sequence(f_response_encoded, batch_first=True, padding_value=0)
             padded_output_ids = torch.full((output_ids.size(0), 2*self.args.max_new_tokens), 151643, dtype=output_ids.dtype, device = output_ids.device) #151643 is pad token in qwen2vl #TODO hardcoded
             padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
@@ -388,6 +388,7 @@ class QwenVLMPolicy(nn.Module):
             else:
                 with torch.no_grad():
                     values, sum_log_probs, action_tokens_log_prob = qwen_evaluate(self.value_model, padded_output_ids, self.args.temperature, self.args.thought_prob_coef, self.processor, text=self.INPUT_IDS, image=image  )
+            
             return values, padded_output_ids, action, random_mask, command, log_prob, action_tokens_log_prob
         #create fake output_ids  based on action and env_name and tokenizing it
         #create INPUT_IDS  specific for action_log_prob calculation
@@ -402,15 +403,16 @@ class QwenVLMPolicy(nn.Module):
                                                         image=image,
                                                         args = self.args)
             action, random_mask, command = self.projection_f(text_action, action_sampling = self.args.action_sampling)
-            if random_mask == 0:  #in the case of grpo the output_ids will be regenerated anyway
-                fake_response = generate_fake_response( text_action, command)
-                f_response_encoded = self.processor.tokenizer(fake_response, padding=True, return_tensors="pt")["input_ids"]
-                padded_output_ids_trimmed = pad_sequence(f_response_encoded, batch_first=True, padding_value=0)
-                padded_output_ids = torch.full((output_ids.size(0), 2*self.args.max_new_tokens), 151643, dtype=output_ids.dtype, device = output_ids.device) #151643 is pad token in qwen2vl #TODO hardcoded
-                padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
-                output_ids = padded_output_ids
-                with torch.no_grad():
-                    values, action_log_prob, action_tokens_log_prob = qwen_evaluate(self.value_model, padded_output_ids, self.args.temperature, self.args.thought_prob_coef, self.processor, text=self.INPUT_IDS, image=image  )
+            # if random_mask == 1:  #in the case of grpo the output_ids will be regenerated anyway
+                
+            #     fake_response = generate_fake_response( text_action, command)
+            #     f_response_encoded = self.processor.tokenizer(fake_response, padding=True, return_tensors="pt")["input_ids"]
+            #     padded_output_ids_trimmed = pad_sequence(f_response_encoded, batch_first=True, padding_value=0)
+            #     padded_output_ids = torch.full((output_ids.size(0), 2*self.args.max_new_tokens), 151643, dtype=output_ids.dtype, device = output_ids.device) #151643 is pad token in qwen2vl #TODO hardcoded
+            #     padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
+            #     output_ids = padded_output_ids
+            #     with torch.no_grad():
+            #         values, action_log_prob, action_tokens_log_prob = qwen_evaluate(self.value_model, padded_output_ids, self.args.temperature, self.args.thought_prob_coef, self.processor, text=self.INPUT_IDS, image=image  )
             return value, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob
         
     def act_batch(self, inputs, text=None, group=4):
@@ -488,6 +490,7 @@ class QwenVLMPolicy(nn.Module):
                                                         images=images,
                                                         args = self.args)
         action_scores = []
+        bad_util=0
         for output in outputs:
             string = output
             string = string.lower()
@@ -500,9 +503,10 @@ class QwenVLMPolicy(nn.Module):
                 response_json = json.loads(string)
                 action_score = response_json["score"]
             except:
-                action_score = 4
+                action_score = -1
+                bad_util += 1
             action_scores.append(action_score)
-        return action_scores, outputs[0]
+        return action_scores, outputs, bad_util
 
     def evaluate_actions_batch(self, inputs, output_ids, INPUT_IDS=None):
         bs = output_ids.shape[0]
@@ -519,6 +523,7 @@ class QwenVLMPolicy(nn.Module):
             images.append(image)
         if INPUT_IDS is None:
             INPUT_IDS = [self.INPUT_IDS for _ in range(bs)]
+        
         output_ids = output_ids.to(self.base.device)
         
         value, action_log_prob, _ = qwen_evaluate_batch(value_model= self.value_model,

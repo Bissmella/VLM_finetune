@@ -222,7 +222,6 @@ def text_projection(text_actions: List[str], env_name):
         else:
             # The string contains none or multiple keywords, randomly select an index from action_list
             print("Random action! ")
-            print(text_actions)
             output_indices.append(random.choice(list(id_to_action.keys())))
             random_mask.append(1)
         commands.append(action_list[output_indices[-1]])
@@ -302,7 +301,7 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
                 chosen_action = action_list[sampled_index]
                 output_indices.append(sampled_index)
                 commands.append(chosen_action)
-                random_mask.append(1)
+                random_mask.append(0)
                 log_probs.append(log_prob)
                 print("taken random action !!")
                 # print("JSON parse error:", e)

@@ -36,7 +36,6 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=
     --use-lora \
     --train-vision all \
     --save-dir "$SAVE_DIR" \
-    --grpo \
     --action-sampling \
     $ACT_FREQ_REWARD_FLAG \
     $TEMP_PREDICTOR_FLAG \
