@@ -78,21 +78,6 @@ def get_trainable_params( model, return_with_names=False):
         else:
             return filter(lambda p: p.requires_grad, model.parameters())
 
-def save_image_action(traj, step, image, action=None):
-    trajNum= traj
-    output_path = "/home/bahaduri/RL4VLM/outputs/trajs"
-    folder_path = output_path + f"/{trajNum}"
-    actions_file = folder_path + "/actions"
-    actions_file = Path(actions_file)
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
-    if not actions_file.exists():
-        actions_file.touch()
-    image.save(folder_path + f"/{step}.png")
-    if action is not None:
-        action = action[0]
-        with open(actions_file, 'a') as f:
-            f.write(action + '\n')
     
 
 def main():
@@ -120,7 +105,7 @@ def main():
         
         print("main proc")
         run_name = args.wandb_run + "-" + args.env_name
-        wandb.init(project=args.wandb_project, name=run_name, group=args.wandb_group, job_type=str(args.seed), config=args) #TODO group, job_type
+        wandb.init(project=args.wandb_project, name=run_name, group=args.wandb_group, job_type=str(args.seed), config=args)
         
     ## environment interaction device is cpu
     model_device = device
@@ -180,13 +165,11 @@ def main():
 
     base.config.max_length = 1024
     print("Model max context length:{}".format(base.config.max_length))
-    # base, tokenizer = init_pretrained_model(base, tokenizer, pretrain_mm_adapter = args.pretrain_mm_adapter)
-    # image_processor = base.get_vision_tower().image_processor
-    #breakpoint()
+    
     base_lora_config = LoraConfig(
             r=128,
             lora_alpha=256,
-            target_modules=["q_proj", "v_proj", "k_proj", "mlp.0", "mlp.2"],#find_all_linear_names(base,args.train_vision),
+            target_modules=["q_proj", "v_proj", "k_proj", "mlp.0", "mlp.2"],
             lora_dropout=0.05,
             bias="none",
             task_type="CAUSAL_LM",
@@ -206,7 +189,7 @@ def main():
         for n, p in base.named_parameters():
             if "policy" in n:
                 p.requires_grad = True
-    #breakpoint()
+    
     if "Qwen2.5" in model_path:
         hidden_dim = 2048
     else:
@@ -296,7 +279,7 @@ def main():
 
     
     actor_critic, optimizer, lr_scheduler = accelerator.prepare(actor_critic, optimizer, lr_scheduler)
-    #actor_critic, lr_scheduler = accelerator.prepare(actor_critic, lr_scheduler)
+    
     actor_critic.base.set_adapter("policy")
     if args.temp_predictor:
         from a2c_ppo_acktr.temp_predictor import Temp_predictor
@@ -304,7 +287,6 @@ def main():
     else:
         temporal_predictor = None
     # actor_critic.base.set_adapter('policy')
-    # actor_critic.value_model.base.set_adapter('policy')
     
     if args.grpo:
         agent = algo.GRPO(
@@ -345,8 +327,6 @@ def main():
     to_pil = T.ToPILImage()
     image = to_pil(image_tensor)
     
-    #image.save('/home/bahaduri/RL4VLM/outputs/00.png')
-    #image.save(folder_path + "/00.png")
     
     #_, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act_batch(image, INPUT_IDS)
     _, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
@@ -389,8 +369,8 @@ def main():
         for step in range(args.num_steps):
             # Sample actions
             with torch.no_grad():
-                INPUT_IDS = qs#tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0)
-                # INPUT_IDS[INPUT_IDS == 0] = 259 # 869: . (period), 29871: SPIECE, 259: whitespace
+                INPUT_IDS = qs
+                
 
                 image_tensor = rollouts.obs[step].squeeze(0).permute(2,0,1).float() #TODO rollouts.obs[step] needs to be checked if expected shape
                 if image_tensor.max() <= 1.0:
@@ -401,10 +381,10 @@ def main():
 
                 # Save the plot
                 #image.save(f'/home/bahaduri/RL4VLM/outputs/00.png')
-                #print("Active adapter", actor_critic.base.active_adapter)
+                
                 value, output_id, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(
                         image, text = INPUT_IDS)
-                #save_image_action(j, step, image, command)
+
             text_action = processor.decode(list(filter(lambda num: num != 151643, output_id[0].tolist()))) #151643 is the pad_token for the qwen model #TODO hardcoded
             prev_infos = copy.deepcopy(infos)
             

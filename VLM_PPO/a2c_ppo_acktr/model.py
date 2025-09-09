@@ -160,16 +160,17 @@ class VLMPolicy(nn.Module):
 
 class QwenVLMValue(nn.Module):
     """
-    actually the base is also used for generation!
+    extends base as value model by attaching a value head.
     """
     def __init__(self, base, processor, hidden_dim=1536, grpo=False):
+        # First layer  #the hidden states of the qwen has 1536 dims
         super(QwenVLMValue, self).__init__()
         self.base = base
         self.processor = processor
-        # hard-code to llama hidden size for the value head
+        
         if not grpo:
             self.value_head = nn.Sequential(
-                nn.Linear(hidden_dim, 1024), # First layer  #the hidden states of the qwen has 1536 dims
+                nn.Linear(hidden_dim, 1024), 
                 nn.ReLU(), # Non-linearity
                 nn.Linear(1024, 512), # Second layer
                 nn.ReLU(), # Non-linearity
@@ -180,7 +181,7 @@ class QwenVLMValue(nn.Module):
     
     def get_value(self, hidden_states):
         """
-        different from polic get_value, this is getting value based on computed hidden states
+        different from policy get_value, this is getting value based on computed hidden states
         """
         if self.value_head is not None:
             return self.value_head(hidden_states)
@@ -196,16 +197,20 @@ class QwenVLMValue(nn.Module):
             return self.forward_tmp(**inputs)
         
     def forward_val(self,  text, image):
-        # if image_tensor.size(0) != 1:
-        #     input_ids = input_ids.broadcast_to(image_tensor.size(0), input_ids.size(-1))
+        """
+        gets value of an action.
+        
+        text: string - textual prompt
+        image: tensor - image observation from environment
 
-        # image_tensor = image_tensor.to(self.base.device, dtype = self.base.dtype)
-        # _, _, _, _, inputs_embeds, _ = self.base.prepare_inputs_labels_for_multimodal(input_ids.to(self.base.device), None, None, None, None, image_tensor)
-        # inputs_embeds = inputs_embeds.to(self.base.device, dtype = self.base.dtype)
+        returns:
+        if value head is present:
+            values: tensor shape[1,1] - the value of action based on value head
+        else:
+            out: tensor shape[1,1] - a 0 value
+        """
         if self.value_head is not None:
             input = qwen_process(self.processor, text, image)
-            # inputs_ids = input.input_ids
-            # assert inputs_ids.shape[1] > 256
             input = input.to(self.base.device)
             outputs = self.base(
                 **input,
@@ -238,6 +243,8 @@ class QwenVLMValue(nn.Module):
         loss_weights: Optional[torch.LongTensor] =None,
     ) -> Union[Tuple, Qwen2VLCausalLMOutputWithPast]:
         r"""
+        This is used for temporal predictability generation. Predicts the next action given the previous sequence of actions.
+
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
             config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
@@ -359,13 +366,14 @@ class QwenVLMPolicy(nn.Module):
 
     def act(self, image, deterministic=False, text=None):
         """
-        
+        creates prompt out of the image and text.
+        In case of self.args.action_sampling: uses score policy
+            If deterministic:
+                takes max over score policy
+            else:
+                sample from score policy
+        If self.args.action_sampling is False: uses standard act policy
         """
-        # image_tensor = self.process_obs(inputs)
-        # if INPUT_IDS is None:
-        #     INPUT_IDS = self.INPUT_IDS
-        #only outputs, input coming from generate  outputs is [text], output_ids as well probably
-        # fake_response = response_func( outputs, command)
         if self.args.action_sampling:
             text_action, output_ids, output_ids_trimmed = qwen_generate(value_model = self.value_model,
                                                         processor = self.processor,
@@ -373,12 +381,11 @@ class QwenVLMPolicy(nn.Module):
                                                         image=image,
                                                         args = self.args)
             action, random_mask, command, log_prob, thts_list = self.projection_f(text_action, action_sampling = self.args.action_sampling, deterministic= deterministic)
-            #if random_mask == 1:# or not self.args.grpo:  #in the case of grpo the output_ids will be regenerated anyway
-            fake_response = generate_fake_response( text_action, command, thts_list)
+            
+            fake_response = generate_fake_response( text_action, command, thts_list) #new correctly formatted response based on the command
         
             f_response_encoded = self.processor.tokenizer(fake_response, padding=True, return_tensors="pt")["input_ids"]
-            # else:
-            #     f_response_encoded = output_ids_trimmed
+            
             padded_output_ids_trimmed = pad_sequence(f_response_encoded, batch_first=True, padding_value=0)
             padded_output_ids = torch.full((output_ids.size(0), 2*self.args.max_new_tokens), 151643, dtype=output_ids.dtype, device = output_ids.device) #151643 is pad token in qwen2vl #TODO hardcoded
             padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
@@ -390,20 +397,16 @@ class QwenVLMPolicy(nn.Module):
                     values, sum_log_probs, action_tokens_log_prob = qwen_evaluate(self.value_model, padded_output_ids, self.args.temperature, self.args.thought_prob_coef, self.processor, text=self.INPUT_IDS, image=image  )
             
             return values, padded_output_ids, action, random_mask, command, log_prob, action_tokens_log_prob, fake_response
-        #create fake output_ids  based on action and env_name and tokenizing it
-        #create INPUT_IDS  specific for action_log_prob calculation
-        # call evaluate_actions  to get log_prob
-        #qwen_generate already is calling qwen_evaluate so just bring it here 
+        
 
-        ## very original one here
-        else:
+        else: #using standard policy
             value, output_ids, text_action, action_log_prob, action_tokens_log_prob = qwen_generate(value_model = self.value_model,
                                                         processor = self.processor,
                                                         text = text,
                                                         image=image,
                                                         args = self.args)
             action, random_mask, command = self.projection_f(text_action, action_sampling = self.args.action_sampling)
-            # if random_mask == 1:  #in the case of grpo the output_ids will be regenerated anyway
+            # if random_mask == 1:  #in the case of grpo the output_ids will be regenerated anyway #TODO to be cleaned
                 
             #     fake_response = generate_fake_response( text_action, command)
             #     f_response_encoded = self.processor.tokenizer(fake_response, padding=True, return_tensors="pt")["input_ids"]
@@ -416,8 +419,12 @@ class QwenVLMPolicy(nn.Module):
             return value, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob
         
     def act_batch(self, inputs, text=None, group=4):
+        """
+        same as act but in batch mode supporting group generation (multiple generation for each prompt similar to GRPO).
+        inputs: List[tensors] - list of image
+        text: string - the standard prompt 
+        """
         bs = inputs.shape[0]
-        #inputs= [input]
         images = []
         for img in inputs:
             image_tensor = img.squeeze(0).permute(2,0,1).float()
@@ -441,14 +448,21 @@ class QwenVLMPolicy(nn.Module):
         return self.value_model(text = text, image = image)
 
     def evaluate_actions(self, inputs, output_ids, INPUT_IDS=None):
+        """
+        Calculates value of pre-generated action
+
+        inputs: tensor - image
+        INPUT_IDS: string - the text prompt
+        output_ids:  tensor - ids of pre-generated response
+        """
         assert inputs.shape[0] == 1, "multip image in action evaluation!"
-        image_tensor = inputs.squeeze(0).permute(2,0,1).float() #TODO rollouts.obs[step] needs to be checked if expected shape
+        image_tensor = inputs.squeeze(0).permute(2,0,1).float()
         
         if image_tensor.max() <= 1.0:
             image_tensor = (image_tensor * 255).byte()
         to_pil = T.ToPILImage()
         image = to_pil(image_tensor)
-        #image_tensor = self.process_obs(inputs)
+        
         if INPUT_IDS is None:
             INPUT_IDS = self.INPUT_IDS
         output_ids = output_ids.to(self.base.device)
@@ -461,54 +475,19 @@ class QwenVLMPolicy(nn.Module):
                                         image = image,)
         return value, action_log_prob
     
-    def calc_utility(self, images, INPUT_IDS):
-        outputs = qwen_calc_utility(value_model = self.value_model,
-                                                        processor = self.processor,
-                                                        text = INPUT_IDS,
-                                                        images=images,
-                                                        args = self.args)
-        
-        string = outputs[0]
-        string = string.lower()
-        try:
-            match = re.search(r"```(?:json)?\n(.*?)\n```", string, re.DOTALL)
-            if match:
-                string = match.group(1)
-            else:
-                string = string.strip()
-            response_json = json.loads(string)
-            action_scores = response_json["score"]
-        except:
-            action_scores = -1
-        return action_scores, outputs[0]
-    
-    def calc_utility_batch(self, images, INPUT_IDS):
-        
-        outputs = qwen_calc_utility_batch(value_model = self.value_model,
-                                                        processor = self.processor,
-                                                        text = INPUT_IDS,
-                                                        images=images,
-                                                        args = self.args)
-        action_scores = []
-        bad_util=0
-        for output in outputs:
-            string = output
-            string = string.lower()
-            try:
-                match = re.search(r"```(?:json)?\n(.*?)\n```", string, re.DOTALL)
-                if match:
-                    string = match.group(1)
-                else:
-                    string = string.strip()
-                response_json = json.loads(string)
-                action_score = response_json["score"]
-            except:
-                action_score = -1
-                bad_util += 1
-            action_scores.append(action_score)
-        return action_scores, outputs, bad_util
-
     def evaluate_actions_batch(self, inputs, output_ids, INPUT_IDS=None):
+        """
+        same as above but in batch mode. The result is not consistent with evaluate_actions!!! #TODO
+
+        inputs: List[tensors] - list of input images
+        INPUT_IDS: string - the standard text prompt (same prompt for all images will be used)
+        output_ids: tensor - pre-generated response
+
+        returns:
+            value: tensor - value of the action
+            action_log_prob: tensor - log probability of the action
+
+        """
         bs = output_ids.shape[0]
         if inputs.shape[0] != output_ids.shape[0]:
             inputs = inputs.repeat(bs, 1, 1, 1)
@@ -536,29 +515,71 @@ class QwenVLMPolicy(nn.Module):
                                                  grpo = False)
         return value, action_log_prob
 
-"""
-    def collate_fn(self, input):
-            
-            # examples has a length of batch-size that is not fixed and can vary
-            # each consist of tuple: first is chat, second is random-mask
-            
-            # Get the texts and images, and apply the chat template
-            examples = [example[0] for example in input]
-            random_masks = [example[1] for example in input]
-            bad_masks = [example[2] for example in input]
-            status = [example[3] for example in input]
-            
-            status = torch.tensor(status, dtype=torch.long)
-            texts = [
-                self.processor.apply_chat_template(example, tokenize=False) for example in examples
-            ]  # Prepare texts for processing
-            image_inputs = [process_vision_info(example)[0] for example in examples]  # Process the images to extract inputs
+    def calc_utility(self, images, INPUT_IDS):
+        """
+        calculates utility of an action based on before and after image in the environment using the guidance in prompt (INPUT_IDS).
 
-            # Tokenize the texts and process the images
-            batch = self.processor(
-                text=texts, images=image_inputs, return_tensors="pt", padding=True
-            )
-"""
+        images: list[tensors] - list of before image and after image (based on the action)
+        INPUT_IDS: string - textual prompt describing the action taken and scoring scale
+
+        returns:
+        action_scores: int - the utility score given to the action if output was parsed else -1
+        outputs: string - the textual output of the model
+        
+        """
+        outputs = qwen_calc_utility(value_model = self.value_model,
+                                                        processor = self.processor,
+                                                        text = INPUT_IDS,
+                                                        images=images,
+                                                        args = self.args)
+        
+        string = outputs[0]
+        string = string.lower()
+        try:
+            match = re.search(r"```(?:json)?\n(.*?)\n```", string, re.DOTALL)
+            if match:
+                string = match.group(1)
+            else:
+                string = string.strip()
+            response_json = json.loads(string)
+            action_scores = response_json["score"]
+        except:
+            action_scores = -1
+        return action_scores, outputs[0]
+    
+    def calc_utility_batch(self, images, INPUT_IDS):
+        """
+        Same as above but in batch mode.
+
+        returns:
+        same as above
+        bad_util: int - number of bad and unparseable outputs
+        """
+        
+        outputs = qwen_calc_utility_batch(value_model = self.value_model,
+                                                        processor = self.processor,
+                                                        text = INPUT_IDS,
+                                                        images=images,
+                                                        args = self.args)
+        action_scores = []
+        bad_util=0
+        for output in outputs:
+            string = output
+            string = string.lower()
+            try:
+                match = re.search(r"```(?:json)?\n(.*?)\n```", string, re.DOTALL)
+                if match:
+                    string = match.group(1)
+                else:
+                    string = string.strip()
+                response_json = json.loads(string)
+                action_score = response_json["score"]
+            except:
+                action_score = -1
+                bad_util += 1
+            action_scores.append(action_score)
+        return action_scores, outputs, bad_util
+
 
 
 class QwenTempPredictor(nn.Module):

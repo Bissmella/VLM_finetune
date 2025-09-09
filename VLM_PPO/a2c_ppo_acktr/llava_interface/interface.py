@@ -88,28 +88,32 @@ def llava_evaluate(value_model, input_ids, output_ids, image_tensor, temperature
 
 
 def qwen_generate(value_model, processor, text, image, args):
-    # prompt_input = qwen_format(processor, text, image)
-    # prompt_text = processor.apply_chat_template(prompt_input, tokenize=False, add_generation_prompt=True)
-    # image_inputs, video_inputs = process_vision_info(prompt_input)
+    """
+    Inference using QWEN-VL model. Decides on action and gives action value.
 
-    # input = processor(text = prompt_text,
-    #         images=image_inputs,
-    #         videos=video_inputs,
-    #         padding=True,
-    #         padding_side="left",
-    #         return_tensors="pt",)
+    Inputs:
+    value_model: model - value model
+    processor: hf processor - processor for processing multimodal data
+    text: string - textual prompt
+    image: tensor - image
+    args: arg dict - arguments including generation arguments
+
+    returns:
+    values: tensor - action value from value model
+    padded_output_ids: tensor - output ids
+    outputs: List[string] - textual generated output
+    sum_log_probs: tensor - sum of action and thoughts token log probability
+    action_tokens_log_prob: tensor - log probability of action tokens only
+    """
     input = qwen_process(processor, text, image)
     base = value_model.base
     input = input.to(base.device)
-    # image_tensor = image_tensor.to(base.device, dtype = base.dtype)
-    # _, _, _, _, inputs_embeds, _ = base.prepare_inputs_labels_for_multimodal(input_ids.to(base.device), None, None, None, None, image_tensor)
-    # inputs_embeds = inputs_embeds.to(base.device, dtype = base.dtype)
     input_ids = input.input_ids
     with torch.inference_mode():
         outputs = base.generate(
         **input,
         do_sample=True,
-        temperature=0.2,#args.temperature,
+        temperature=args.temperature,
         num_beams=args.num_beams,
         max_new_tokens=args.max_new_tokens,
         use_cache=True,
@@ -136,77 +140,13 @@ def qwen_generate(value_model, processor, text, image, args):
         with torch.no_grad():
             values, sum_log_probs, action_tokens_log_prob = qwen_evaluate(value_model, padded_output_ids, args.temperature, args.thought_prob_coef, processor, input=input  )
         return values, padded_output_ids, outputs, sum_log_probs, action_tokens_log_prob
-    ## very original down here:
-    """
-    padded_output_ids_trimmed = pad_sequence(output_ids_trimmed, batch_first=True, padding_value=0)
-    padded_output_ids = torch.full((output_ids.size(0), 2*args.max_new_tokens), 151643, dtype=output_ids.dtype, device = output_ids.device) #151643 is pad token in qwen2vl #TODO hardcoded
-    
-    
-    padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
-    with torch.no_grad():
-        values, sum_log_probs, action_tokens_log_prob = qwen_evaluate(value_model, padded_output_ids, args.temperature, args.thought_prob_coef, processor, input=input  )
-    return values, padded_output_ids, outputs, sum_log_probs, action_tokens_log_prob
-    """
-
-def qwen_calc_utility(value_model, processor, text, images, args):
-    #images = [image1, image2]
-    input = qwen_process_multiImg(processor, text, images)
-    base = value_model.base
-    input = input.to(base.device)
-    input_ids = input.input_ids
-    with torch.inference_mode():
-        outputs = base.generate(
-        **input,
-        do_sample=False,
-        temperature=0.2,#args.temperature,
-        num_beams=args.num_beams,
-        max_new_tokens=args.max_new_tokens,
-        use_cache=True,
-        output_scores=True,
-        output_hidden_states=True,
-        return_dict_in_generate=True,
-        pad_token_id=processor.tokenizer.eos_token_id,)
-        output_ids = outputs['sequences'] 
-    
-    output_ids_trimmed = [
-                    out_ids[len(in_ids) :] for in_ids, out_ids in zip(input_ids, output_ids)
-                ]
-    outputs = processor.batch_decode(
-                        output_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-                    )
-    return outputs
-
-
-def qwen_calc_utility_batch(value_model, processor, text, images, args):
-    input = qwen_batch_process_multiIm(processor, text, images)
-    base = value_model.base
-    input = input.to(base.device)
-    input_ids = input.input_ids
-    with torch.inference_mode():
-        outputs = base.generate(
-        **input,
-        do_sample=False,
-        temperature=0.2,#args.temperature,
-        num_beams=args.num_beams,
-        max_new_tokens=args.max_new_tokens,
-        use_cache=True,
-        output_scores=True,
-        output_hidden_states=True,
-        return_dict_in_generate=True,
-        pad_token_id=processor.tokenizer.eos_token_id,)
-        output_ids = outputs['sequences'] 
-    
-    output_ids_trimmed = [
-                    out_ids[len(in_ids) :] for in_ids, out_ids in zip(input_ids, output_ids)
-                ]
-    outputs = processor.batch_decode(
-                        output_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-                    )
-    return outputs
-
 
 def qwen_generate_batch(value_model, processor, text, image, args):
-    #only to be used fro GRPO generation
+    """
+    Similar to 'qwen_generate' but for batched inputs.
+    #recommended to only be used fro GRPO generation
+    """
+    
     input = qwen_batch_process(processor, text, image)
     base = value_model.base
     input = input.to(base.device)
@@ -216,9 +156,9 @@ def qwen_generate_batch(value_model, processor, text, image, args):
         outs = base.generate(
         **input,
         do_sample=True,
-        temperature=1.0, #TODO hardcoded#args.temperature,
+        temperature=args.temperature, #temperature of 1.0 is recommended
         top_p=0.8,  #TODO  hardcoded
-        num_beams=1, #args.num_beams,
+        num_beams=args.num_beams,    #num_beams 1 is recommended
         max_new_tokens=args.max_new_tokens,
         use_cache=True,
         output_scores=True,
@@ -242,8 +182,98 @@ def qwen_generate_batch(value_model, processor, text, image, args):
         _, sum_log_probs, action_tokens_log_prob = qwen_evaluate(value_model, padded_output_ids, 1.0, args.thought_prob_coef, processor, input=input  )
     return outputs, padded_output_ids, sum_log_probs
 
-def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, processor, text=None, image=None, input=None, value_only=False):
+
+def qwen_calc_utility(value_model, processor, text, images, args):
+    """
+    Similar to 'qwen_generate' but for getting the action utility.
+
+    Inputs:
+    value_model: model - value model
+    processor: hf processor - processor for processing multimodal data
+    text: string - textual prompt
+    images: List[tensors] - list including before and after images
+    args: arg dict - arguments including the generation args
+    """
+    input = qwen_process_multiImg(processor, text, images)
+    base = value_model.base
+    input = input.to(base.device)
+    input_ids = input.input_ids
+    with torch.inference_mode():
+        outputs = base.generate(
+        **input,
+        do_sample=False,
+        temperature=args.temperature,
+        num_beams=args.num_beams,
+        max_new_tokens=args.max_new_tokens,
+        use_cache=True,
+        output_scores=True,
+        output_hidden_states=True,
+        return_dict_in_generate=True,
+        pad_token_id=processor.tokenizer.eos_token_id,)
+        output_ids = outputs['sequences'] 
     
+    output_ids_trimmed = [
+                    out_ids[len(in_ids) :] for in_ids, out_ids in zip(input_ids, output_ids)
+                ]
+    outputs = processor.batch_decode(
+                        output_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+                    )
+    return outputs
+
+
+def qwen_calc_utility_batch(value_model, processor, text, images, args):
+    """
+    Same as 'qwen_calc_utility' but for batch mode.
+    """
+    input = qwen_batch_process_multiIm(processor, text, images)
+    base = value_model.base
+    input = input.to(base.device)
+    input_ids = input.input_ids
+    with torch.inference_mode():
+        outputs = base.generate(
+        **input,
+        do_sample=False,
+        temperature=args.temperature,
+        num_beams=args.num_beams,
+        max_new_tokens=args.max_new_tokens,
+        use_cache=True,
+        output_scores=True,
+        output_hidden_states=True,
+        return_dict_in_generate=True,
+        pad_token_id=processor.tokenizer.eos_token_id,)
+        output_ids = outputs['sequences'] 
+    
+    output_ids_trimmed = [
+                    out_ids[len(in_ids) :] for in_ids, out_ids in zip(input_ids, output_ids)
+                ]
+    outputs = processor.batch_decode(
+                        output_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+                    )
+    return outputs
+
+
+
+
+def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, processor, text=None, image=None, input=None, value_only=False):
+    """
+    Gets action value and action log probability by calculating it based on generated tokens probabilities.
+
+    inputs:
+    value_model
+    output_ids: tensor - generated output from the prompt
+    temperature: float - temperature used for generation of the output_ids
+    thought_prob_coef: float - coefficient used for scaling the log probabilities of thought tokens
+    processor: hf processor - processor for processing multimodal data
+    text: string - textual prompt used for generating the output_ids
+    image: tensor - state image
+    input: tensor - input ids  used for generating output_ids. processed form of prompt. if it exists the text and image are not required
+    value_only: boolean - if True the value won't be calculated and 0 will be returned
+
+    returns:
+    values: tensor - action value
+    sum_log_prob: tensor - sum of log probs of action and thoughts tokens
+    action_tokens_log_prob: tensor - sum of log probs of action tokens only
+    """
     if input is None:
         input = qwen_process(processor, text, image)
     
@@ -258,10 +288,9 @@ def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, proce
 
     base = value_model.base
     
-    #TODO check input_ids   to be a long tensor
     
     outputs = base(
-        **input, #input_ids = input_ids,
+        **input,
         output_hidden_states = True,
         )
     scores = outputs.logits
@@ -275,19 +304,19 @@ def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, proce
         values = 0
     if value_only:
         return values
-    #breakpoint()
+    
     scores = scores[:, input_token_len:-1, :]
     scores = scores * (1/temperature)
     scores = scores.to(torch.float32)
     log_probs = torch.nn.functional.log_softmax(scores, dim=-1)
     log_probs = log_probs.to(torch.bfloat16)
     # omit the first outputted id which is decoder start token
-    output_ids_mask = (output_ids != 151643)[:, 1:]
+    output_ids_mask = (output_ids != 151643)[:, 1:]  #151643 is QWEN model's padding
     ## selected_log_probs counts the log prob of the first token
     
     selected_log_probs = output_ids_mask*torch.take_along_dim(log_probs, output_ids[:,1:].unsqueeze(2), dim = 2).squeeze(2)
     unfolded = output_ids.unfold(dimension=-1, size=2, step=1)
-    # the text string '"action":' corresponts to this sequence of tokens: (torch.tensor([[1311]]))  in qwen2vl tokenizer
+    # the text string '"action":' corresponts to this sequence of tokens: (torch.tensor([[1311, 788]]))  in qwen2vl tokenizer #TODO hardcoded
     target = torch.tensor([1311, 788]).to(base.device)
     matches = (unfolded == target).all(dim = -1)
     match_index = matches.nonzero(as_tuple=True)[-1]
@@ -314,7 +343,10 @@ def qwen_evaluate(value_model, output_ids, temperature, thought_prob_coef, proce
 
 
 def qwen_evaluate_batch(value_model, output_ids, temperature, thought_prob_coef, processor, text=None, image=None, input=None, grpo=False):
-    
+    """
+    Same as qwen_evaluate but for batch inference.
+    !!!output of the two are not consistent !!!!! #TODO
+    """
     if input is None:
         input = qwen_batch_process(processor, text, image)
     
@@ -322,7 +354,6 @@ def qwen_evaluate_batch(value_model, output_ids, temperature, thought_prob_coef,
     input = input.to(value_model.base.device)
     
     if input['input_ids'].size(0) != 1:
-        #input['input_ids'] = input['input_ids'].broadcast_to(output_ids.size(0), input['input_ids'].size(-1)) #Mking them with same batch size
         input['input_ids'] = input['input_ids'].repeat(output_ids.size(0), 1)
     
     input['input_ids'] = torch.cat([input["input_ids"], output_ids], dim=1)
@@ -332,16 +363,14 @@ def qwen_evaluate_batch(value_model, output_ids, temperature, thought_prob_coef,
 
     base = value_model.base
     
-    #TODO check input_ids   to be a long tensor
     import gc
-    #import torch
 
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.ipc_collect()
     
     outputs = base(
-        **input, #input_ids = input_ids,
+        **input,
         output_hidden_states = not grpo,
         )
     scores = outputs.logits
@@ -353,8 +382,7 @@ def qwen_evaluate_batch(value_model, output_ids, temperature, thought_prob_coef,
     else:
         values = torch.tensor([0])
     
-    #values = value_model.value_head(hidden_states)
-    #scores = scores[:, input_token_len:-1, :]
+    
     scores = scores * (1/temperature)
     scores = scores.to(torch.float32)
     log_probs = torch.nn.functional.log_softmax(scores, dim=-1)
@@ -393,7 +421,17 @@ def qwen_evaluate_batch(value_model, output_ids, temperature, thought_prob_coef,
 
 
 def qwen_process(processor, text, image=None):
-    #TODO make sure that image is Image.Image type and not tensor
+    """
+    processes the input (text and image) and prepare it for QWEN-VL model.
+
+    inputs:
+    processor: hf processor - processor for processing multimodal inputs
+    text: string - textual prompt
+    image: tensor - image, it will be converted to PIL image required by QWEN model
+
+    outputs:
+    input: dict - prompt prepared, tokenized, and processed for QWEN-VL model inference
+    """
     messages=[]
     message={"role":"user"}
     if image is not None:
@@ -414,7 +452,6 @@ def qwen_process(processor, text, image=None):
         ]
     message["content"]=content
     messages.append(message)
-    # prompt_input = qwen_format(text, image)
     prompt_text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
 
@@ -427,6 +464,13 @@ def qwen_process(processor, text, image=None):
     return input
 
 def qwen_process_multiImg(processor, text, images):
+    """
+    Similar to 'qwen_process' but supporting multi images
+
+    Inputs:
+    similar to qwen_process except:
+    images: List[tensors]
+    """
     messages=[]
     message={"role":"user"}
     content= [
@@ -445,7 +489,6 @@ def qwen_process_multiImg(processor, text, images):
         )
     message["content"]=content
     messages.append(message)
-    # prompt_input = qwen_format(text, image)
     prompt_text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
 
@@ -582,7 +625,13 @@ def qwen_batch_process_multiIm(processor, texts, images=None):
 
 def format_data_sft(sample):
     """
+    formats data for supervised fine-tuning of QWEN-vl models
+    
+    Inputs:
+    sample: dict - should include followings:
     sample["image"]:  should be a list of tensor or pilImage
+    sample["query"]: string - the question
+    sample["label"]: string - ground truth label
     """
     input_images = sample["image"]
     images = []
@@ -594,7 +643,7 @@ def format_data_sft(sample):
                     image_tensor = image.permute(2, 0, 1).float()
                 
                 if image_tensor.max().item() <= 1.0:
-                    image_tensor = (image_tensor * 255)#.to(torch.uint8)#.byte()
+                    image_tensor = (image_tensor * 255)
                 
                 to_pil = T.ToPILImage()
                 image = to_pil(image_tensor)
@@ -614,10 +663,6 @@ def format_data_sft(sample):
         }
     )
     return [
-        # {
-        #     "role": "system",
-        #     "content": [{"type": "text", "text": system_message}],
-        # },
         {
             "role": "user",
             "content": contents,
