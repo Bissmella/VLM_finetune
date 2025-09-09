@@ -85,7 +85,7 @@ def save_image_action(traj, step, image, action=None):
         step = GLOBALSTEP + 1
     GLOBALSTEP = step
     trajNum= traj
-    output_path = "/home/bahaduri/RL4VLM/outputs/trajs_col"
+    output_path = "/home/bahaduri/RL4VLM/outputs/score_trajs"
     folder_path = output_path + f"/{trajNum}"
     actions_file = folder_path + "/actions"
     actions_file = Path(actions_file)
@@ -236,11 +236,11 @@ def main():
     ###
     #for loading lora weights for testing purposes
     
-    lora_weights = torch.load("/home/bahaduri/RL4VLM/outputs/dk_VLM_eps_1_notht_util_3/model_20.checkpoint", map_location='cpu')
-    lora_weights = {k.replace("value_model.", "", 1): v for k, v in lora_weights.items() if k.startswith("value_model.")}
+    # lora_weights = torch.load("/home/bahaduri/RL4VLM/outputs/dk_VLM_eps_1_notht_util_ppo_scoreOnly/model_last.checkpoint", map_location='cpu')
+    # lora_weights = {k.replace("value_model.", "", 1): v for k, v in lora_weights.items() if k.startswith("value_model.")}
     
-    missing_keys, unexpected_keys = value_model.load_state_dict(lora_weights, strict=False)
-    print("**********", len(unexpected_keys))
+    # missing_keys, unexpected_keys = value_model.load_state_dict(lora_weights, strict=False)
+    # print("**********", len(unexpected_keys))
     
     
     ###
@@ -354,7 +354,7 @@ def main():
     #image.save(folder_path + "/00.png")
     
     #_, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act_batch(image, INPUT_IDS)
-    _, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
+    _, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob, full_response = actor_critic.act(image, text = INPUT_IDS)
     """
     action_file_path = "/home/bahaduri/RL4VLM/outputs/0/actions"
     with open(action_file_path, "r") as file:
@@ -513,9 +513,10 @@ def main():
 
                 # Save the plot
                 #image.save(f'/home/bahaduri/RL4VLM/outputs/{j}_{step}.png') 
-                value, output_id, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(
+                value, output_id, action, random_mask, command, action_log_prob, action_tokens_log_prob, full_response = actor_critic.act(
                         image, text = INPUT_IDS)
-                #save_image_action(trajNum, step, image, command)
+                
+                save_image_action(trajNum, step, image, full_response)
             text_action = processor.decode(list(filter(lambda num: num != 151643, output_id[0].tolist()))) #151643 is the pad_token for the qwen model #TODO hardcoded
             prev_infos = copy.deepcopy(infos)
             
@@ -531,7 +532,7 @@ def main():
                     step_2 = (step * j -1) + step
                 else:
                     step_2 = 0
-                epsilon = 0.0#1#max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 5000)) * (epsilon_start - epsilon_min))
+                epsilon = 1.0#1#max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 5000)) * (epsilon_start - epsilon_min))
                 if random.random() < epsilon:
                     args.action_sampling = True
                 else:
@@ -587,7 +588,7 @@ def main():
                 [[0.0] if 'bad_transition' in info.keys() else [1.0] for info in infos])
             rollouts.insert_task(tasks, command, status)  #TODO check command is a nice list
             rollouts.insert(obs, output_id, action,
-                            action_log_prob, value, reward, masks, bad_masks, random_mask, fail= fail, success = success)
+                            action_log_prob, value, reward, masks, bad_masks, random_mask, torch.tensor([[True]]).float(), fail= fail, success = success)
             success = False
             fail = False
             #print("step: ", step)

@@ -314,7 +314,7 @@ class PPO():
         avg = torch.mean(values[:-1][~mask])
         mask_bad_util = values == -1
         values[:-1][mask & ~mask_r] = avg  #setting failed endings to average
-        values[mask_bad_util] = avg        #setting bad utility estimates (no utility estimate) to average
+        values[mask_bad_util] = 4 #10        #setting bad utility estimates (no utility estimate) to average
         values = torch.clamp(values, max=10) 
         values = values /10.0
         
@@ -351,7 +351,7 @@ class PPO():
         dist_entropy_epoch = 0
         grad_step = 0
         self.actor_critic.train()
-        # adv_quant = torch.quantile(advantages, 0.6)
+        adv_quant = torch.quantile(advantages, 0.6)
         # #breakpoint()
         Min_weight = torch.tensor([0.0])
         for e in range(self.ppo_epoch):
@@ -388,9 +388,14 @@ class PPO():
                         ppo_loss = -surr2.mean()
                     else:
                         ppo_loss = -torch.min(surr1, surr2).mean()
-                    bc_loss = (- action_log_probs * torch.clamp(adv_targ, min=0.0)).mean()
+                    mask = (adv_targ >= adv_quant).float()   # 1 if adv_targ >= quantile, else 0
+                    bc_loss = (- action_log_probs * mask).mean()
+
+                    #bc_loss = (- action_log_probs * torch.clamp(adv_targ, min=adv_quant)).mean()
                     act_sampling_batch = act_sampling_batch.to(action_log_probs.device)
-                    action_loss = act_sampling_batch * bc_loss + (1- act_sampling_batch) * ppo_loss
+                    #action_loss = act_sampling_batch * bc_loss + (1- act_sampling_batch) * ppo_loss
+                    action_loss = ppo_loss
+                    
                     # print(action_loss)
                     if not self.utility_function:
                         if self.use_clipped_value_loss:

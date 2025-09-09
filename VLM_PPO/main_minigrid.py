@@ -132,7 +132,7 @@ def main():
     model_path = args.model_path
     cache_dir = args.cache_dir
 
-    processor = AutoProcessor.from_pretrained(model_path)
+    processor = AutoProcessor.from_pretrained(model_path) 
     print(model_path)
     if "Qwen2.5" in model_path:
         Qwen_model = Qwen2_5_VLForConditionalGeneration
@@ -214,7 +214,7 @@ def main():
     if args.dense_rewards:
         no_value = False
     elif args.utility_func:
-        no_value = True
+        no_value = False
     else:
         no_value = False
     value_model = QwenVLMValue(base, processor, hidden_dim, grpo = no_value) #args.grpo) if grpo then there will be no value head
@@ -376,6 +376,7 @@ def main():
     num_explore = int(args.explore_portion*num_updates)
     prev_infos = []
     infos = []
+    PPO = False
     
     for j in tqdm(range(num_updates)):
         n_start = False
@@ -383,8 +384,8 @@ def main():
             if j > 1:
                 step_2 = (args.num_steps * j -1) + args.num_steps
             else:
-                step_2 = 0
-            epsilon = max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 8000)) * (epsilon_start - epsilon_min))
+                step_2 = (args.num_steps * j -1) + args.num_steps #0
+            epsilon = 1#max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 8000)) * (epsilon_start - epsilon_min))
         for step in range(args.num_steps):
             # Sample actions
             with torch.no_grad():
@@ -414,16 +415,17 @@ def main():
             #     reward += 0.21  #TODO for testing
             #epsilon greedy
             current_action_sampling = args.action_sampling
-            if use_epsilon:
+            #if use_epsilon:
                 # if j > 1:
                 #     step_2 = (step * j -1) + step
                 # else:
                 #     step_2 = 0
                 # epsilon = max(epsilon_min, epsilon_start - (step_2/(args.num_env_steps - 8000)) * (epsilon_start - epsilon_min))
-                if random.random() < epsilon:
-                    args.action_sampling = True
-                else:
-                    args.action_sampling = False
+                # if not PPO:
+                #     if random.random() < epsilon:
+                #         args.action_sampling = True
+                #     else:
+                #         args.action_sampling = False
             #
             
             qs = get_prompt(args.env_name, args.action_only_prompt, args.action_sampling, infos)  #this prompt is for sampling
@@ -449,6 +451,12 @@ def main():
                 if n_start or step == 0:
                     tasks[i] = qs
                 if d:# or step % 4 ==0:  ##TODO for testing
+                    # if random.random() >= epsilon:
+                    #     PPO = True
+                    #     args.action_sampling = False
+                    # else:
+                    #     PPO = False
+                    #     args.action_sampling = True
                     trajNum +=1
                     episode_rewards.append(running_episode_rewards[i].item())
                     if running_episode_rewards[i] > 0:

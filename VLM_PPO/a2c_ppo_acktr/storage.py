@@ -121,11 +121,11 @@ class RolloutStorage(object):
             #returns = 'ab'
             returns[-1] =0
             rewards = self.rewards.clone()
-            # if rewards [-1] == 0:
-            #     rewards[-1] = 0.1
-            # mask = self.masks[1:] == 0.0
-            # mask_r = self.rewards == 0
-            # rewards[mask & mask_r] = 0.1
+            if rewards [-1] == 0:
+                rewards[-1] = 0.08
+            mask = self.masks[1:] == 0.0
+            mask_r = self.rewards == 0
+            rewards[mask & mask_r] = 0.08
             for step in reversed(range(self.rewards.size(0))):
                 #try:
                 self.returns[step] = rewards[step] + gamma * returns[step+1] * self.masks[step+ 1]

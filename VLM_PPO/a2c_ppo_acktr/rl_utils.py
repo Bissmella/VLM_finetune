@@ -227,12 +227,13 @@ def text_projection(text_actions: List[str], env_name):
         commands.append(action_list[output_indices[-1]])
     return torch.Tensor([output_indices]).long().reshape(-1, 1), torch.Tensor([random_mask]).long().reshape(-1, 1), commands
 
-def text_projection_pr(text_actions: List[str], env_name, action_sampling = False):
+def text_projection_pr(text_actions: List[str], env_name, action_sampling = False, deterministic=False):
     
     if not action_sampling:
         return text_projection(text_actions, env_name)
     else:
         output_indices = []
+        thts_list = []
         random_mask = []
         commands = []
         log_probs = []
@@ -276,18 +277,28 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
                 string = re.sub(r",\s*([}\]])", r"\1", string)
                 response_json = json.loads(string)
                 action_scores = response_json["action_scores"]
-                
+                thts = response_json.get("thoughts", "")
                 
                 scores_r = [action_scores.get(action.lower(), 0) if "Unused" not in action else -float('inf') for action in action_list]
                 scores = torch.tensor(scores_r, dtype=torch.float32)
                 # Softmax for sampling
-                probs = torch.nn.functional.softmax(scores / 1.5, dim=0)  #TODO 1.5 is a temperature hardcoded
+                probs = torch.nn.functional.softmax(scores / 2.0, dim=0)  #TODO 1.5 - 2.0 is a temperature hardcoded
                 
                 sampled_index = torch.multinomial(probs, num_samples=1).item()
+                
                 max_index = torch.argmax(probs).item()
-                log_prob = torch.log(probs[sampled_index] + 1e-8)
-                chosen_action = action_list[sampled_index] #max_index] #
-                output_indices.append(sampled_index) #max_index) #
+                if deterministic:
+                    log_prob = torch.log(probs[max_index] + 1e-8)
+                    chosen_action = action_list[max_index]
+                    output_indices.append(sampled_index)
+                else:
+                    log_prob = torch.log(probs[sampled_index] + 1e-8)
+                    chosen_action = action_list[sampled_index] #max_index] #
+                    output_indices.append(sampled_index) #max_index) #
+                    if sampled_index == max_index:
+                        thts_list.append(thts)
+                    else:
+                        thts_list.append("")
                 commands.append(chosen_action)
                 random_mask.append(0)
                 log_probs.append(log_prob)
@@ -303,10 +314,11 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
                 commands.append(chosen_action)
                 random_mask.append(0)
                 log_probs.append(log_prob)
+                thts_list.append("")
                 print("taken random action !!")
                 # print("JSON parse error:", e)
         
-        return torch.Tensor([output_indices]).long().reshape(-1, 1), torch.Tensor([random_mask]).long().reshape(-1, 1), commands, torch.tensor(log_probs, dtype=torch.bfloat16)
+        return torch.Tensor([output_indices]).long().reshape(-1, 1), torch.Tensor([random_mask]).long().reshape(-1, 1), commands, torch.tensor(log_probs, dtype=torch.bfloat16), thts_list
 
 
 # def generate_fake_response(outputs: List[str], commands: List[str], env_name=""):
@@ -320,9 +332,9 @@ def text_projection_pr(text_actions: List[str], env_name, action_sampling = Fals
 #             new_outputs.append(output)
 #     return new_outputs
 
-def generate_fake_response(outputs: List[str], commands: List[str], env_name: str =""):
+def generate_fake_response(outputs: List[str], commands: List[str], thts_list: List[str], env_name: str =""):
     new_outputs = []
-    for output, command in zip(outputs, commands):
+    for output, command, tht in zip(outputs, commands, thts_list):
         try:
 
             # Optionally remove any trailing 'action_scores' section or close the JSON cleanly
@@ -340,8 +352,11 @@ def generate_fake_response(outputs: List[str], commands: List[str], env_name: st
             # fake_response = (
             #     f'{{\n  "action": "{command}"\n}}'
             # )
-            fake_response = f'```json\n{{\n  "action": "{command}"\n}}\n```'
-
+            if tht == "":
+                fake_response = f'```json\n{{\n  "action": "{command}"\n}}\n```'
+            else:
+                fake_response = f'```json\n{{\n  "thoughts": "{tht}",\n  "action": "{command}"\n}}\n```'
+            
             new_outputs.append(fake_response)
         except Exception as e:
             print(f"[Warning] Failed to process output: {e}")

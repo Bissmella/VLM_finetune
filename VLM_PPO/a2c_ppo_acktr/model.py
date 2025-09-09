@@ -357,7 +357,7 @@ class QwenVLMPolicy(nn.Module):
         processed_images = obs
         return self.image_processor.preprocess(processed_images, return_tensors='pt')['pixel_values'].to(dtype=self.base.dtype)
 
-    def act(self, image, deterministic=True, text=None):
+    def act(self, image, deterministic=False, text=None):
         """
         
         """
@@ -372,9 +372,9 @@ class QwenVLMPolicy(nn.Module):
                                                         text = text,
                                                         image=image,
                                                         args = self.args)
-            action, random_mask, command, log_prob = self.projection_f(text_action, action_sampling = self.args.action_sampling)
+            action, random_mask, command, log_prob, thts_list = self.projection_f(text_action, action_sampling = self.args.action_sampling, deterministic= deterministic)
             #if random_mask == 1:# or not self.args.grpo:  #in the case of grpo the output_ids will be regenerated anyway
-            fake_response = generate_fake_response( text_action, command)
+            fake_response = generate_fake_response( text_action, command, thts_list)
         
             f_response_encoded = self.processor.tokenizer(fake_response, padding=True, return_tensors="pt")["input_ids"]
             # else:
@@ -389,7 +389,7 @@ class QwenVLMPolicy(nn.Module):
                 with torch.no_grad():
                     values, sum_log_probs, action_tokens_log_prob = qwen_evaluate(self.value_model, padded_output_ids, self.args.temperature, self.args.thought_prob_coef, self.processor, text=self.INPUT_IDS, image=image  )
             
-            return values, padded_output_ids, action, random_mask, command, log_prob, action_tokens_log_prob
+            return values, padded_output_ids, action, random_mask, command, log_prob, action_tokens_log_prob, fake_response
         #create fake output_ids  based on action and env_name and tokenizing it
         #create INPUT_IDS  specific for action_log_prob calculation
         # call evaluate_actions  to get log_prob

@@ -21,7 +21,7 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=
     --init-lr 1e-5 \
     --end-lr 1e-9 \
     --lr_max_steps 25 \
-    --eval-num-per-episode 8 \
+    --eval-num-per-episode 100 \
     --num-env-steps 15000 \
     --num-steps 512 \
     --grad-accum-steps 128 \
