@@ -18,12 +18,12 @@ deepspeed ../train_sft.py \
     --deepspeed ds_config.json \
     --lora_enable True \
     --model_name_or_path "Qwen/Qwen2.5-VL-3B-Instruct" \
-    --data_path /home/bahaduri/RL4VLM/outputs/labeled_data/labels.json \
+    --data_path /home/bahaduri/RL4VLM/outputs/score_trajs/labels.json \
     --image_folder /home/bahaduri/RL4VLM/outputs/labeled_data \
     --bf16 False \
     --fp16 True \
     --output_dir $SAVE_DIR \
-    --num_train_epochs 6 \
+    --num_train_epochs 4 \
     --per_device_train_batch_size 4 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 1 \

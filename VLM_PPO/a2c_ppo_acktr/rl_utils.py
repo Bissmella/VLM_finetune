@@ -108,14 +108,14 @@ def get_prompt(env_name, action_only,sampling = False, infos = None):
         else:
             qs = "You are an expert 2D game player in a grid-based environment. "
             qs += "You are observing the image of the current state, and your goal is to get the player to the pink goal square/tile. "
-            qs += "The player is shown by cyan triangle.The tip (pointy end) of the triangle is the direction the player is facing, the flat side is the back. In the game the player must pick up a key to unlock the door. The square with a minus (-) and blue or yellow color is the closed door. The player shuold reach the pink goal tile to win. "
+            qs += "The player is shown by cyan triangle.The tip (pointy end) of the triangle is the direction the player is facing, the flat side is the back. In the game the player must pick up a key to unlock the door. The square with a minus (-) and blue or yellow color is the closed door. The player should reach the pink goal tile to win. "
             qs += "At each step the possible actions are: ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key is in front of it, 'Toggle': toggle door to open it only if door is infront of it]. "
-            qs = qs + "Your response should be a valid json object in the following format: \{\n"
+            qs = qs + "Your response should be a valid json object in the following format. Include 'thoughts' only if it is needed to reason: \{\n"
             #qs = qs + "\"action\": \"your choosen action\" "
-            #qs = qs + "\"thoughts\": \"Describe the current scene and state of the agent as seen in the image.\", \n"  ##Describe the current scene step-by-step and explain the visible area, position and facing direction of the player, nearby objects, or interactive elements with their relative locations.
+            qs = qs + "\"thoughts\": \"(Optional) describe the current scene and state of the agent as seen in the image.\", \n"  ##Describe the current scene step-by-step and explain the visible area, position and facing direction of the player, nearby objects, or interactive elements with their relative locations.
             #qs = qs + "\n}"
             #qs = qs + "\"top_action_analysis\": \"Based on the above scene, list some plausible next actions the player might take, along with reasoning for each. Do not choose one yet."
-            qs = qs + "\"action\": \"your choosen action\" \n}"
+            qs = qs + "\"action\": \"your chosen action\" \n}"
     elif "MiniGrid-Empty" in env_name:
         if sampling:
             qs = "You are an expert 2D game player in a grid-based environment. The environment is an 2d grid empty room, and the goal of the agent is to reach the pink goal square. "

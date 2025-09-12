@@ -15,8 +15,9 @@ if [ ! -d "$SAVE_DIR" ]; then
     mkdir -p "$SAVE_DIR"
     echo "Created directory: $SAVE_DIR"
 fi
+#test_vlm_val.py
 
-TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=1 accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero2.yaml --main_process_port $PORT ../test_vlm_val.py \
+TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=1 accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero2.yaml --main_process_port $PORT ../vlm_traj_preprocess.py \
     --env-name MiniGrid-DoorKey-6x6-v0 \
     --init-lr 1e-5 \
     --end-lr 1e-9 \

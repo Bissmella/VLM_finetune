@@ -179,7 +179,7 @@ def qwen_generate_batch(value_model, processor, text, image, args):
     
     padded_output_ids[:, :padded_output_ids_trimmed.size(1)] = padded_output_ids_trimmed
     with torch.no_grad():
-        _, sum_log_probs, action_tokens_log_prob = qwen_evaluate(value_model, padded_output_ids, 1.0, args.thought_prob_coef, processor, input=input  )
+        _, sum_log_probs, action_tokens_log_prob = qwen_evaluate(value_model, padded_output_ids, args.temperature, args.thought_prob_coef, processor, input=input  )
     return outputs, padded_output_ids, sum_log_probs
 
 

@@ -37,7 +37,6 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=
     --train-vision all \
     --save-dir "$SAVE_DIR" \
     --utility-func \
-    --action-sampling  \
     $ACT_FREQ_REWARD_FLAG \
     $TEMP_PREDICTOR_FLAG \
     $USE_WANDB_FLAG \

@@ -185,7 +185,7 @@ def main():
                 if "adversery" in n:
                     p.requires_grad = False
         base.set_adapter("policy")
-        base.load_adapter("/home/bahaduri/RL4VLM/outputs/sft/value_lora/policy", "policy")
+        base.load_adapter("/home/bahaduri/RL4VLM/outputs/sft_trajs/lora_weights/policy", "policy") #/home/bahaduri/RL4VLM/outputs/sft_trajs/lora_weights/policy #/home/bahaduri/RL4VLM/outputs/sft/value_lora/policy
         for n, p in base.named_parameters():
             if "policy" in n:
                 p.requires_grad = True
@@ -384,6 +384,7 @@ def main():
                 
                 value, output_id, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(
                         image, text = INPUT_IDS)
+                #print("command: ", command, "random mask: ", random_mask)
 
             text_action = processor.decode(list(filter(lambda num: num != 151643, output_id[0].tolist()))) #151643 is the pad_token for the qwen model #TODO hardcoded
             prev_infos = copy.deepcopy(infos)

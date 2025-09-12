@@ -314,8 +314,8 @@ class QwenVLMValue(nn.Module):
             cache_position=cache_position,
         )
         
-        #hidden_states = outputs.hidden_states#outputs[0]
-        logits = outputs.logits#outputs[0]#self.base.lm_head(hidden_states)
+        
+        logits = outputs.logits
 
         loss = None
         if labels is not None:

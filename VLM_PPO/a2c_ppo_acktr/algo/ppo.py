@@ -419,7 +419,7 @@ class PPO():
                     else:
                         loss = action_loss
                         value_loss = torch.tensor([0])
-                    # print("total loss: ", loss)
+                    print("total loss: ", loss, "action loss: ", action_loss, "value loss: ", value_loss)
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
 
