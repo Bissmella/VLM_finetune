@@ -78,7 +78,28 @@ def get_trainable_params( model, return_with_names=False):
         else:
             return filter(lambda p: p.requires_grad, model.parameters())
 
-    
+
+def load_checkpoint(save_dir, model=None, optimizer=None):
+    # Load model params
+    if model is not None:
+        checkpoint_path = save_dir + f"/model_last.checkpoint"
+        lora_weights = torch.load(checkpoint_path, map_location="cpu")
+        lora_weights = {k.replace("value_model.", "", 1): v for k, v in lora_weights.items() if k.startswith("value_model.")}
+        print("LoRA weight sum:", sum(v.abs().sum().item() for v in lora_weights.values()))
+        missing_keys, unexpected_keys = model.load_state_dict(lora_weights, strict=False)
+        print("**********", len(unexpected_keys))
+        return model
+
+    # Load optimizer state
+    if optimizer is not None:
+        optimizer_path = save_dir + f"/optimizer_last.checkpoint"
+        optimizer_state = torch.load(optimizer_path, map_location="cpu")
+        
+        optimizer.load_state_dict(optimizer_state)
+
+        print(f"Resumed from last checkpoint")
+        return optimizer
+
 
 def main():
     args = get_args()
@@ -105,7 +126,10 @@ def main():
         
         print("main proc")
         run_name = args.wandb_run + "-" + args.env_name
-        wandb.init(project=args.wandb_project, name=run_name, group=args.wandb_group, job_type=str(args.seed), config=args)
+        if args.resume:
+            wandb.init(project=args.wandb_project, name=run_name, group=args.wandb_group, job_type=str(args.seed), id=args.wandb_id, resume="allow", config=args)
+        else:
+            wandb.init(project=args.wandb_project, name=run_name, group=args.wandb_group, job_type=str(args.seed), config=args)
         
     ## environment interaction device is cpu
     model_device = device
@@ -247,24 +271,28 @@ def main():
     INPUT_IDS_PO = get_prompt(args.env_name, args.action_only_prompt) #original prompt to optimize for. it asks directly for action.
     projection_f = partial(text_projection_pr, env_name=args.env_name)  #text_projection
 
+    
+    
+    optimizer_grouped_parameters = [
+        {
+            'params': [p for n, p in value_model.named_parameters() if ("lora_A.adversery" in n or "lora_B.adversery" in n)], 'lr': 3e-4,
+        },
+        {
+          'params': [p for n, p in value_model.named_parameters() if ("lora_A.adversery" not in n and "lora_B.adversery" not in n)], 'weight_decay': args.weight_decay, 'lr': args.init_lr, 'eps':args.eps,
+          }
+    ]
+    
+    optimizer = optim.Adam([p for p in value_model.parameters() if p.requires_grad], lr=args.init_lr, eps=args.eps, weight_decay=args.weight_decay) #optimizer_grouped_parameters)#
+
+    ##RESUME HERE
+    if args.resume:
+        value_model = load_checkpoint(args.save_dir, model = value_model)
     actor_critic = QwenVLMPolicy(
                              processor=processor,
                              value_model=value_model,
                              projection_f=projection_f,
                              INPUT_IDS=INPUT_IDS_PO,
                              args=args)
-    
-    optimizer_grouped_parameters = [
-        {
-            'params': [p for n, p in actor_critic.value_model.named_parameters() if ("lora_A.adversery" in n or "lora_B.adversery" in n)], 'lr': 3e-4,
-        },
-        {
-          'params': [p for n, p in actor_critic.value_model.named_parameters() if ("lora_A.adversery" not in n and "lora_B.adversery" not in n)], 'weight_decay': args.weight_decay, 'lr': args.init_lr, 'eps':args.eps,
-          }
-    ]
-    
-    optimizer = optim.Adam([p for p in actor_critic.value_model.parameters() if p.requires_grad], lr=args.init_lr, eps=args.eps, weight_decay=args.weight_decay) #optimizer_grouped_parameters)#
-
     lr_scheduler = optim.lr_scheduler.LambdaLR(
         optimizer,
         lr_lambda=[
@@ -344,7 +372,7 @@ def main():
     start = time.time()
     num_updates = int(
         args.num_env_steps) // args.num_steps // args.num_processes
-    
+    agent.num_updates = num_updates
     
     
     print(qs)
@@ -357,8 +385,11 @@ def main():
     prev_infos = []
     infos = []
     PPO = False
-    
-    for j in tqdm(range(num_updates)):
+    if args.resume:
+        start_update = args.start_update
+    else:
+        start_update = 0    
+    for j in tqdm(range(start_update, num_updates)):
         n_start = False
         if use_epsilon:
             if j > 1:

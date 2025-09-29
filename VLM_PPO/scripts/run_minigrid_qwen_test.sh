@@ -1,5 +1,5 @@
-DEVICES="0, 1"
-NUM_PROCESS=2
+DEVICES="0"
+NUM_PROCESS=1
 SEED=2            # $1                #
 WANDB_RUN="run1"      #$2     #
 SAVE_DIR="/home/bahaduri/RL4VLM/outputs/tmp"      #"./"   #$3            #
@@ -30,12 +30,11 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --n
     --temperature 0.2 \
     --ppo-epoch 4 \
     --mini-batch-size 2 \
-    --model-path "Qwen/Qwen2-VL-2B-Instruct" \
+    --model-path "Qwen/Qwen2.5-VL-3B-Instruct" \
     --use-lora \
     --train-vision all \
     --save-dir "$SAVE_DIR" \
-    --action-sampling \
-    --rlef \
+    --utility-func \
     $ACT_FREQ_REWARD_FLAG \
     $TEMP_PREDICTOR_FLAG \
     $USE_WANDB_FLAG \

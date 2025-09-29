@@ -577,6 +577,7 @@ class QwenVLMPolicy(nn.Module):
             except:
                 action_score = -1
                 bad_util += 1
+                breakpoint()
             action_scores.append(action_score)
         return action_scores, outputs, bad_util
 

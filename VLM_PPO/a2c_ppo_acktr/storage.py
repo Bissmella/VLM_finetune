@@ -116,7 +116,8 @@ class RolloutStorage(object):
                         gae_lambda,
                         use_proper_time_limits=True,
                         num_update = 0):
-        if self.grpo or self.utility_function:
+        if (self.grpo or self.utility_function) or True:
+            retunrs_n = self.returns.clone()
             returns = self.returns
             #returns = 'ab'
             returns[-1] =0
@@ -128,19 +129,21 @@ class RolloutStorage(object):
             rewards[mask & mask_r] = 0.08
             for step in reversed(range(self.rewards.size(0))):
                 #try:
-                self.returns[step] = rewards[step] + gamma * returns[step+1] * self.masks[step+ 1]
+                retunrs_n[step] = rewards[step] + gamma * returns[step+1] * self.masks[step+ 1]
                 # except:
                 #     breakpoint()
-            if self.act_freq_reward:
-                self.freq_rewards = self.compute_freq_reward(scale=self.int_reward_scale)
-            self.temp_rewards = torch.zeros((1))
-            if self.temp_pred_reward:
-                temp_rewards = self.get_temp_rewards(self.temporal_predictor)
-                temp_rewards = temp_rewards * self.int_reward_scale
+            self.returns_n = retunrs_n
+            
+            # if self.act_freq_reward:
+            #     self.freq_rewards = self.compute_freq_reward(scale=self.int_reward_scale)
+            # self.temp_rewards = torch.zeros((1))
+            # if self.temp_pred_reward:
+            #     temp_rewards = self.get_temp_rewards(self.temporal_predictor)
+            #     temp_rewards = temp_rewards * self.int_reward_scale
                 
-                if num_update > 0:
-                    self.temp_rewards = temp_rewards
-            return
+            #     if num_update > 0:
+            #         self.temp_rewards = temp_rewards
+            # return
         if use_proper_time_limits:
             if use_gae:
                 self.value_preds[-1] = next_value

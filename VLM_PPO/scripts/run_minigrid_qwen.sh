@@ -10,6 +10,9 @@ GROUP=$7                                               #"vlm-tmp-cur"
 ALGO_FLAG=$8
 ACT_SAMPLE_FLAG=$9
 RLEF_FLAG=${10}
+RESUME_FLAG=${11}
+WANDB_ID=${12}
+START_UPDATE=${13}
 USE_WANDB_FLAG="--use-wandb"   #--use-wandb"            #""              #  #MiniGrid-Empty-Random-6x6-v0   #MiniGrid-DoorKey-6x6-v0
 
 
@@ -23,8 +26,8 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --n
     --init-lr 1e-5 \
     --end-lr 1e-9 \
     --lr_max_steps 25 \
-    --eval-num-per-episode 6 \
-    --num-env-steps 20000 \
+    --eval-num-per-episode 16 \
+    --num-env-steps 80000 \
     --num-steps 512 \
     --grad-accum-steps 64 \
     --max-new-tokens 256 \
@@ -44,10 +47,13 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --n
     $ACT_FREQ_REWARD_FLAG \
     $TEMP_PREDICTOR_FLAG \
     $USE_WANDB_FLAG \
-    --save-interval 2 \
+    --save-interval 5 \
     --wandb-project "minigrid" \
     --wandb-run "$WANDB_RUN" \
-    --wandb-group "$GROUP"
+    --wandb-group "$GROUP" \
+    $RESUME_FLAG \
+    --wandb-id "$WANDB_ID" \
+    --start-update $START_UPDATE
     # --use-wandb \
     # --q4
     #"Qwen/Qwen2-VL-2B-Instruct"

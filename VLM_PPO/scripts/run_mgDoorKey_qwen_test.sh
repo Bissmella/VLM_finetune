@@ -2,7 +2,7 @@ DEVICES="0"
 NUM_PROCESS=1
 SEED=2            # $1                #
 WANDB_RUN="run1"      #$2     #
-SAVE_DIR="/home/bahaduri/RL4VLM/outputs/tmp"      #"./"   #$3            #
+SAVE_DIR="/home/bahaduri/RL4VLM/outputs/dk_VLM_eps_1_optTht"      #"./"   #$3            #
 PORT=29488           #          #29488  $4           #
 TEMP_PREDICTOR_FLAG=""                     #"--temp-predictor"             ##"--temp-predictor"
 ACT_FREQ_REWARD_FLAG=""                      #"--act-freq-reward"     #""
@@ -22,7 +22,7 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=
     --end-lr 1e-9 \
     --lr_max_steps 25 \
     --eval-num-per-episode 8 \
-    --num-env-steps 15000 \
+    --num-env-steps 60000 \
     --num-steps 12 \
     --grad-accum-steps 2 \
     --max-new-tokens 256 \
@@ -43,7 +43,9 @@ TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES CUDA_LAUNCH_BLOCKING=
     --save-interval 2 \
     --wandb-project "minigrid" \
     --wandb-run "$WANDB_RUN" \
-    --wandb-group "$GROUP"
+    --wandb-group "$GROUP" \
+    --resume \
+    --start-update 39
     #     --utility-func \
     # --action-sampling  \
     #--rlef \

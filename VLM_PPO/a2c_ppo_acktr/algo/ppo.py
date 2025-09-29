@@ -189,7 +189,7 @@ class PPO():
                  max_grad_norm=None,
                  use_clipped_value_loss=True,
                  save_dir = "",
-                 save_interval =2,
+                 save_interval =5,
                  grad_cumulate_step=64,
                  utility_function = False):
 
@@ -212,7 +212,7 @@ class PPO():
         self.save_dir = save_dir
         self.save_interval = save_interval
         self.gradient_accumulation_steps = grad_cumulate_step
-
+        self.num_updates = 100
         self.utility_function = utility_function
 
         self.value_query = (
@@ -320,7 +320,7 @@ class PPO():
         
         num_steps, num_procs, _ = rollouts.value_preds.shape
         values = values.reshape(num_steps, num_procs, 1)
-        rollouts.value_preds = values
+        rollouts.utility = values
         print("total bad utility: ", total_bad_util)
         self.actor_critic.value_model.base.set_adapter("policy")
         #print("Active adapter in ppo after value", self.actor_critic.base.active_adapter)
@@ -330,15 +330,21 @@ class PPO():
         #     if 'policy' in n:
         #         m.register_forward_hook(hook)
         
-
+    def get_alpha(self, update_num):
+        if update_num < 4:
+            return 1.0
+        else:
+            alpha = 1 - (update_num -2) / ((self.num_updates//4) - 2)
+            return alpha
     def update(self, rollouts, update_num):
         random_mask = rollouts.random_mask == 1
         rollouts.returns[random_mask] = -1
-        if self.utility_function:
+        alpha = self.get_alpha(update_num)
+        if self.utility_function and alpha > 0:
             self.get_values(rollouts)
             
-            rollouts.value_preds[random_mask] = 1
-            advantages = rollouts.value_preds[:-1] * rollouts.returns[:-1]
+            advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
+            advantages = alpha * rollouts.utility[:-1] * rollouts.returns_n[:-1] + (1 - alpha) * advantages
         else:
             advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
         advantages = (advantages - advantages.mean()) / (
@@ -397,7 +403,7 @@ class PPO():
                     action_loss = ppo_loss
                     
                     # print(action_loss)
-                    if not self.utility_function:
+                    if not self.utility_function or True: #TODO tmp to do value loss even if utility_function
                         if self.use_clipped_value_loss:
                             value_pred_clipped = value_preds_batch + \
                                 (values - value_preds_batch).clamp(-self.clip_param, self.clip_param)
@@ -419,7 +425,6 @@ class PPO():
                     else:
                         loss = action_loss
                         value_loss = torch.tensor([0])
-                    print("total loss: ", loss, "action loss: ", action_loss, "value loss: ", value_loss)
                     self.accelerator.backward(loss)
                     if self.accelerator.sync_gradients:
 

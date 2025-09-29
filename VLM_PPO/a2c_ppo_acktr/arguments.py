@@ -188,6 +188,7 @@ def get_args():
     parser.add_argument("--use-wandb", default=False, action='store_true')
     parser.add_argument("--wandb-project", type=str, default='test')
     parser.add_argument("--wandb-run", type=str, default='test')  #wandb-group
+    parser.add_argument("--wandb-id", type=str, default='')
     parser.add_argument("--wandb-group", type=str, default='test')
     parser.add_argument("--q4", default=False, action='store_true')
     parser.add_argument("--q8", default=False, action='store_true')
@@ -198,6 +199,8 @@ def get_args():
     parser.add_argument("--grpo", default=False, action='store_true') 
     parser.add_argument("--utility-func", default=False, action='store_true')
     parser.add_argument("--dense-rewards", default=False, action='store_true')
+    parser.add_argument("--resume", default=False, action='store_true')
+    parser.add_argument("--start-update", type=int, default=0)
 
     args = parser.parse_args()
 
