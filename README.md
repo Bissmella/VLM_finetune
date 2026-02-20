@@ -16,10 +16,10 @@ This repository provides a complete pipeline for fine-tuning Vision-Language Mod
 ## Pipeline
 
 ```
- ┌──────────────────┐     ┌─────────────────────┐     ┌───────────┐     ┌──────────────┐     ┌──────────┐
- │  Data Collection  │────▶│  Data Preprocessing  │────▶│    SFT     │────▶│  RL (PPO)     │────▶│  Eval    │
- │  (Qwen 32B)      │     │                      │     │           │     │              │     │          │
- └──────────────────┘     └─────────────────────┘     └───────────┘     └──────────────┘     └──────────┘
+
+ │  Data Collection  │────▶│  Data Preprocessing │────▶│    SFT     │────▶│  RL (PPO)     │────▶│  Eval    │
+    (Qwen 32B)     
+
 ```
 
 1. **Data Collection** — Run a large VLM (Qwen2 32B) in the environment to collect labeled trajectories
