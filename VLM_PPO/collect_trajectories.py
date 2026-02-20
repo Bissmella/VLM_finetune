@@ -1,3 +1,20 @@
+"""
+Trajectory Data Collection & Labeling — VLM on MiniGrid
+
+Collects trajectory data by running a VLM agent in MiniGrid environments
+and labels each (observation, action) pair. The collected data is saved
+as JSON + images for downstream use in supervised fine-tuning (SFT).
+
+This script uses Qwen2 VL (32B) as the labeling model to generate
+action annotations for collected trajectories.
+
+Output:
+  Saves labeled trajectory data to DATA_PATH as JSON files with
+  corresponding observation images.
+
+Usage:
+  Run directly or via a shell script with appropriate model/env arguments.
+"""
 from patch import replace_llama_attn_with_xformers_attn
 replace_llama_attn_with_xformers_attn()
 print("using xformers")

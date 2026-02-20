@@ -1,3 +1,14 @@
+#!/bin/bash
+# ============================================================================
+# Supervised Fine-Tuning (SFT) — Qwen2.5-VL on MiniGrid Trajectory Data
+#
+# Trains Qwen2.5-VL-3B on labeled trajectory data via DeepSpeed + LoRA.
+# Data should be prepared by collect_trajectories.py + preprocess_trajectories.py.
+#
+# Args:  $1=SAVE_DIR (output directory for checkpoints)
+#
+# Usage:  bash run_minigrid_sft.sh /path/to/output
+# ============================================================================
 DEVICES="0"
 NUM_PROCESS=1
 SEED=1                #

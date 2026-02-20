@@ -1,3 +1,16 @@
+#!/bin/bash
+# ============================================================================
+# PPO RL Training — Qwen2.5-VL on MiniGrid DoorKey-6x6
+#
+# Main parameterized script for MiniGrid RL experiments.
+# Accepts seed, wandb run name, save dir, port, and feature flags as args.
+#
+# Args:  $1=SEED  $2=WANDB_RUN  $3=SAVE_DIR  $4=PORT  $5=TEMP_PREDICTOR_FLAG
+#        $6=ACT_FREQ_REWARD_FLAG  $7=GROUP  $8=ALGO_FLAG  $9=ACT_SAMPLE_FLAG
+#        ${10}=RLEF_FLAG  ${11}=RESUME_FLAG  ${12}=WANDB_ID  ${13}=START_UPDATE
+#
+# Usage:  bash run_minigrid_qwen.sh 1 "run1" "/path/to/output" 29488 ...
+# ============================================================================
 DEVICES="0"
 NUM_PROCESS=1
 SEED=$1                #1            # 
@@ -21,7 +34,7 @@ if [ ! -d "$SAVE_DIR" ]; then
     echo "Created directory: $SAVE_DIR"
 fi
 
-TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero2.yaml --main_process_port $PORT ../main_minigrid.py \
+TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=$DEVICES accelerate launch --num_processes=$NUM_PROCESS --config_file config_zero2.yaml --main_process_port $PORT ../train_ppo_minigrid.py \
     --env-name MiniGrid-DoorKey-6x6-v0 \
     --init-lr 1e-5 \
     --end-lr 1e-9 \

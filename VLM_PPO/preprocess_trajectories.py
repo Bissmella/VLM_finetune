@@ -1,3 +1,13 @@
+"""
+Trajectory Data Preprocessing for SFT
+
+Preprocesses the raw trajectory data collected by vlm_traj_label.py
+into the format expected by train_sft.py. Converts trajectory sequences
+into (image, conversation) pairs formatted for VLM supervised fine-tuning.
+
+Input:  Raw trajectory data from DATA_PATH (JSON + images)
+Output: Processed dataset ready for LazyTrajSupervisedDataset
+"""
 from patch import replace_llama_attn_with_xformers_attn
 replace_llama_attn_with_xformers_attn()
 print("using xformers")
@@ -317,27 +327,29 @@ def main():
     
     print("here 5")
     #_, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act_batch(image, INPUT_IDS)
-    _, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
+    #_, output_ids, action, random_mask, command, action_log_prob, action_tokens_log_prob = actor_critic.act(image, text = INPUT_IDS)
     
     data = []
-    global DATA_PATH
-
-    root_path=  "/home/bahaduri/RL4VLM/outputs/trajs_col"
+    DATA_PATH= "/home/bahaduri/RL4VLM/outputs/score_trajs"
+    root_path=  "/home/bahaduri/RL4VLM/outputs/score_trajs"
     subfolders = [f.name for f in os.scandir(root_path) if f.is_dir()]
-    subfolders = subfolders[:41]
     
     for subfolder in tqdm(subfolders):
         full_path = os.path.join(root_path, subfolder)
         action_file_path = os.path.join(full_path, "actions")
         
         with open(action_file_path, "r") as file:
-            lines = file.readlines()
+            lines = file.read()
+            #lines = file.readlines()
 
         # Optional: Strip newline characters
-        lines = [line.strip() for line in lines]
+        delimiter = "```\n```json"
+        lines = lines.split(delimiter)
+        
+        #lines = [line.strip() for line in lines]
         actions_subset = lines
-        result_file = "/home/bahaduri/RL4VLM/outputs/captioned/results"
-        result_file = Path(result_file)
+        # result_file = "/home/bahaduri/RL4VLM/outputs/captioned/results"
+        # result_file = Path(result_file)
 
         #getting the smallest int.png in the subfolder as image counter
         
@@ -346,129 +358,51 @@ def main():
         nums = [int(f[:-4]) for f in int_png_files]
         img_counter = min(nums)
         
-        for i, action in tqdm(enumerate(actions_subset)):
-        # image_path = "path/to/your/image.jpg"
-            #action = "Turn Left"
-            """
-            qs = "You are an expert 2D game player in a grid-based environment. The environment has a key that to pick up in order to unlock a door. The door is represented as blue square with a minus, and then reach the green goal square. "
-            qs += "The goal is to get the player to a pink goal tile. The player is shown by triangle."
-            qs += f"The first image shows the previous state and player has taken action {action}, and the second image shows the resulting state."
-            qs += "Evaluate the palyer's action based on the images and assign a score between 0 (bad) and 5 (good)."
-            qs = qs + "Your response should be a valid json object in the following format: \{\n"
-                    #qs = qs + "\"action\": \"your choosen action\" "
-            qs = qs + "\"thoughts\": \"Describe the images and how the action affect the state.\", \n"  ##Describe the current scene step-by-step and explain the visible area, position and facing direction of the player, nearby objects, or interactive elements with their relative locations.
-            #qs = qs + "\n}"
-            #qs = qs + "\"top_action_analysis\": \"Based on the above scene, list some plausible next actions the player might take, along with reasoning for each. Do not choose one yet."
-            qs = qs + "\"score\": \"your score\" \n}"
-            """
-            qs = (
-                "You're an expert in 2D grid-based games guiding a player by scoring his each step based. "
-                "The player is shown by cyan triangle.The tip (pointy end) of the triangle is the direction the player is facing, the flat side is the back. In the game the player must pick up a key to unlock the door. The square with a minus (-) and blue or yellow color is the closed door. The player shuold reach the pink goal tile to win. "
-                "At each step the player takes one of these actions ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key was in front of it in first image, 'Toggle': toggle door only if door was infront of it in first image]. "
-                "You are given two images of the game environment. "
-                f"The first image shows the state *before* taking action: {action}. "
-                "The second image shows the state *after* that action. "
-                "Analyze what has changed in the second image compared to the first. Did the action have any useful effect? "
-                "Rate the usefulness of the action from 0 (useless) to 10 (very useful), based only on the visual evidence in the images.\n "
-                "**Scoring rubric (0 – 10):** \n"
-                "- **10:** Successful interaction or completion (valid Pick up, valid Toggle that opens needed door, or reaching goal with prerequisites met). \n"
-                "- **8 – 9:** Clear improvement: moved closer to the current objective by 1+ tile **or** turned to face it directly (from misaligned to aligned). \n"
-                "- **5 – 7:** Minor but real progress: slight angle improvement or small distance improvement that sets up a good next step. \n"
-                "- **1 – 2:** Neutral/ineffective: no distance/angle improvement; sideways movement; turn that keeps facing irrelevant space. \n"
-                "- **0:** Counterproductive: increased distance, turned away from the objective, moved toward a door while a key exists elsewhere, or attempted invalid Pick up/Toggle. \n"
-                "Respond strictly with a JSON object:\n"
-                "{\n"
-                "\"thoughts\": \"Describe ONLY the changes between before and after images.\",\n"
-                "\"score\": your_score\n"
-                "}"
-            )
-            
-            """
-            qs = (
-                "You're an expert in 2D grid-based games guiding a player by scoring his each step based. The player is new to the game and doesn't know how to play taking most of actions randomly. "
-                "The player (triangle) must pick up the key to unlock the blue door (with a minus) and reach the pink goal tile. "
-                "At each step the player takes one of these actions ['Turn left': turns direction to left, 'Turn right': turns direction to right, 'Move forward': take one step to front, 'Pick up': picks key only if key was in front of it in first image, 'Toggle': toggle door only if door was infront of it in first image] "
-                "You are given two images of a 2d grid-based game environment. "
-                f"The first image is the state before the action '{action}'. "
-                "The second image is the result after this action. "
-                "Analyze what has changed in the second image compared to the first. Did the action have any useful effect? "
-                "Rate the usefulness of the action from 0 (useless) to 5 (very useful), based **only on the visual evidence in the images**. "
-                "Respond with a JSON object:\n"
-                "{\n"
-                "\"thoughts\": \"Describe ONLY what you see changed between the images.\",\n"
-                "\"score\": \"your_score\"\n"
-                "}"
-            )
-            actions = ['Turn left', 'Turn right', 'Move forward', 'Pick up', 'Toggle']
-            action = random.choice(actions)
-
-            qs = (
-                "You are an expert 2D game player in a grid-based environment. The environment has a key that to pick up in order to unlock a door. The door is represented as blue square with a minus, and then reach the green goal square. "
-                #qs = "Rules: you may need to pick up a key to open a locked door, you can only interact with adjacent tiles in the direction you are facing, you can only pass through open doors."
-                "You are observing the image of the current state, and your goal is to get the player to a green goal tile. The player is shown by a triangle."
+        if len(lines) == len(int_png_files):
+            for i, action in tqdm(enumerate(actions_subset)):
+                action = action.lstrip('```json').rstrip('```')
+                phrase_to_remove= " the action scores are as follows:"
                 
-                "At each step you have chosen an action from these actions ['Turn left', 'Turn right', 'Move forward', 'Pick up', 'Toggle']"
-                f"your chosen action is: {action} "
-                #"Respect the preselected action. "
-                "Your response should be a valid json object in the following format: \{\n"
-                #qs = qs + "\"action\": \"your choosen action\" "
-                #"\"thoughts\": \"Describe the current scene and state of the agent as seen in the image.\", \n"  ##Describe the current scene step-by-step and explain the visible area, position and facing direction of the player, nearby objects, or interactive elements with their relative locations.
-                #qs = qs + "\n}"
-                #qs = qs + "\"top_action_analysis\": \"Based on the above scene, list some plausible next actions the player might take, along with reasoning for each. Do not choose one yet."
-                f'\n  "action": "{action}"\n'
-                "} "
-                #f'\"action\": \"{action}\" \n}'
-            )
-            print(qs)
-            print(action)
-            """
-            #image = Image.open(image_path).convert("RGB")  # Convert to RGB to avoid issues with grayscale or RGBA
-            transform = T.ToTensor()  # Converts [0, 255] PIL image to [0.0, 1.0] tensor
+                try:
+                    action_json = json.loads(action)
+                    thts = action_json.get("thoughts", "")
+                    act = action_json["action"]
+                    index_to_remove = thts.find(phrase_to_remove)
+                    if index_to_remove != -1:
+                        thts = thts[:index].strip()
+                    if thts == "":
+                        action = f'```json\n{{\n  "action": "{act}"\n}}\n```'
+                    else:
+                        action = f'```json\n{{\n  "thoughts": "{thts}",\n  "action": "{act}"\n}}\n```'
+                except:
+                    
+                    img_counter += 1
+                    continue
+                #image = Image.open(image_path).convert("RGB")  # Convert to RGB to avoid issues with grayscale or RGBA
+                transform = T.ToTensor()  # Converts [0, 255] PIL image to [0.0, 1.0] tensor
+                    
+                # Step 3: Apply the transformation
+                # image_tensor = transform(image)
+                # images = []
                 
-            # Step 3: Apply the transformation
-            image_tensor = transform(image)
-            images = []
-            
-            img1 = Image.open(root_path + f"/{subfolder}" + f"/{img_counter}.png")
-            image1 = transform(img1).permute(1,2, 0).unsqueeze(0)
-            images.append(image1)
-            try:
-                img2 = Image.open(root_path + f"/{subfolder}" + f"/{img_counter+1}.png")
-                # Step 2: Define transformation to convert image to tensor
-                image2 = transform(img2).permute(1,2, 0).unsqueeze(0)
-                images.append(image2)
-            except:
-                continue
-            
-            #breakpoint()
-            output, out = actor_critic.calc_utility(images, INPUT_IDS = qs)
-            print(i, action, ": ", out)
-            path1, path2 = save_images(img1, img2, img_counter, img_counter+1)
-
-            img_counter += 1
-            data_point = {
-                "action": action,
-                "before_img": path1,
-                "after_img": path2,
-                "response": out,
-                "utility_score": output,
-            }
-            data.append(data_point)
-            print( i, " Done!!")
-            continue
-            save_captioned_images(img1,  action, output, i, img2)
-            if not result_file.exists():
-                result_file.touch()
-            with open(result_file, 'a') as f:
-                f.write(str(i) + ":  " + out)
-        #breakpoint()
-        print(type(image_tensor))  # <class 'torch.Tensor'>
-        print(image_tensor.shape)
+                img_path = root_path + f"/{subfolder}" + f"/{img_counter}.png"
+                
+                if Path(img_path).exists():
+                    img_counter += 1
+                    data_point = {
+                        "action": action,
+                        "image": img_path,
+                    }
+                    data.append(data_point)
+                    print( i, " Done!!")
+                else:
+                    print("image not found!!!")
+                    img_counter += 1
     
-        json_fileName = DATA_PATH + "/labels.json"
-        with open(json_fileName, 'w') as f:
-            json.dump(data, f, indent=4)
-        print(f"Data has been successfully dumped to {json_fileName}")
+    json_fileName = DATA_PATH + "/labels.json"
+    with open(json_fileName, 'w') as f:
+        json.dump(data, f, indent=4)
+    print(f"Data has been successfully dumped to {json_fileName}")
     
 
 if __name__ == "__main__":

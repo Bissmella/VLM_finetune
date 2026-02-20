@@ -1,3 +1,20 @@
+"""
+PPO Reinforcement Learning Training — Qwen2-VL on Gym-Cards
+
+Entry point for training Qwen2-VL models with Proximal Policy
+Optimization (PPO) on gym-cards environments (NumberLine, BlackJack,
+EZPoints, Points24).
+
+Supports:
+  - LoRA fine-tuning of Qwen2-VL-2B-Instruct
+  - Temperature predictor auxiliary head
+  - Action-frequency reward shaping
+  - DeepSpeed ZeRO-2 via Accelerate
+  - Wandb logging
+
+Usage:
+  See scripts/run_nl_qwen.sh for an example launch command.
+"""
 from patch import replace_llama_attn_with_xformers_attn
 replace_llama_attn_with_xformers_attn()
 print("using xformers")

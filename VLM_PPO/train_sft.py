@@ -1,3 +1,21 @@
+"""
+Supervised Fine-Tuning (SFT) for VLMs on MiniGrid Trajectory Data
+
+Trains a VLM (LLaVA / Qwen) on collected trajectory data using standard
+supervised learning. Supports two dataset formats:
+  - LazySupervisedDataset: single-turn image+text pairs
+  - LazyTrajSupervisedDataset: multi-step trajectory sequences
+
+Key features:
+  - LoRA fine-tuning with configurable rank/alpha
+  - HuggingFace Trainer integration (via SFT/trainer.py VLMTrainer)
+  - DeepSpeed ZeRO-2/3 support
+  - Modality-grouped batching for mixed image/text data
+  - Cosine LR schedule
+
+Usage:
+  See scripts/run_minigrid_sft.sh for an example launch command.
+"""
 from patch import replace_llama_attn_with_xformers_attn
 replace_llama_attn_with_xformers_attn()
 print("using xformers")

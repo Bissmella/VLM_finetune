@@ -1,5 +1,11 @@
 """
-Directly copied the code from https://raw.githubusercontent.com/oobabooga/text-generation-webui/main/modules/llama_attn_hijack.py and made some adjustments
+xFormers Attention Patch for LLaMA Models
+
+Replaces the default LLaMA self-attention with xFormers memory-efficient
+attention for reduced VRAM usage and faster training. This patch is applied
+at import time by calling replace_llama_attn_with_xformers_attn().
+
+Based on: https://raw.githubusercontent.com/oobabooga/text-generation-webui/main/modules/llama_attn_hijack.py
 """
 
 import logging

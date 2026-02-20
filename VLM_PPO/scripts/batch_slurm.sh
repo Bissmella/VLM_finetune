@@ -1,4 +1,12 @@
 #!/bin/bash
+# ============================================================================
+# SLURM Batch Script — MiniGrid PPO RL Training
+#
+# Submits a Qwen2.5-VL PPO training job on MiniGrid-DoorKey-6x6 via SLURM.
+# Activates the conda env and calls run_minigrid_qwen.sh with experiment args.
+#
+# Usage:  sbatch batch__vlm.sh
+# ============================================================================
 #SBATCH --partition=electronic
 #SBATCH --job-name=vlm_mingrid_1
 #SBATCH --nodes=1

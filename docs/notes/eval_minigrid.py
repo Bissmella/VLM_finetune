@@ -1,3 +1,19 @@
+"""
+Evaluation Script — VLM Agent on MiniGrid
+
+Evaluates a trained VLM agent (Qwen2.5-VL with LoRA) on MiniGrid
+environments. Loads a checkpoint, runs evaluation episodes, and
+reports success rate, average reward, and episode length statistics.
+
+Supports:
+  - Loading LoRA checkpoints from training runs
+  - Evaluation on DoorKey, Empty-Random, and other MiniGrid envs
+  - Trajectory image saving for qualitative analysis
+  - Wandb logging of evaluation metrics
+
+Usage:
+  See scripts/eval_minigrid_qwen.sh for an example launch command.
+"""
 from patch import replace_llama_attn_with_xformers_attn
 replace_llama_attn_with_xformers_attn()
 print("using xformers")
